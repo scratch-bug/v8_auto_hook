@@ -46,10 +46,12 @@ RUN ./build/install-build-deps.sh \
     --no-backwards-compatible
 
 WORKDIR /app/v8
-RUN gclient sync -D
+
+RUN gclient config --unmanaged --name v8 https://chromium.googlesource.com/v8/v8
+RUN gclient sync -D --no-history --shallow
 RUN gclient runhooks
 
-RUN gn gen out.gn/x64.release
+RUN ./tools/dev/v8gen.py x64.release
 
 WORKDIR /tools
 RUN curl -L -o codeql-linux64.zip https://github.com/github/codeql-cli-binaries/releases/download/v${CODEQL_VERSION}/codeql-linux64.zip \
