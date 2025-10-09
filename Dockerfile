@@ -19,11 +19,9 @@ RUN git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git /
 ENV PATH="/opt/depot_tools:${PATH}"
 
 WORKDIR /app/v8
-RUN gclient config --unmanaged . \
- && gclient sync -D --no-history --force --jobs=8
+RUN gclient sync
 
 RUN ./tools/dev/v8gen.py x64.release
-RUN ninja -C ${V8_OUT} -j ${THREADS} d8
 
 WORKDIR /tools
 RUN curl -L -o codeql-linux64.zip https://github.com/github/codeql-cli-binaries/releases/download/v${CODEQL_VERSION}/codeql-linux64.zip \
@@ -32,12 +30,10 @@ RUN curl -L -o codeql-linux64.zip https://github.com/github/codeql-cli-binaries/
 ENV PATH="/tools/codeql:${PATH}"
 
 WORKDIR /app/v8
-RUN codeql database create ${CODEQL_DB_DIR} \
+RUN codeql database create v8-src-db \
       --language=cpp \
       --source-root=/app/v8 \
-      --command="ninja -C ${V8_OUT} -j ${THREADS} d8" \
-      --threads=${THREADS} --ram=8192 \
-  && codeql database check ${CODEQL_DB_DIR}
+      --command="ninja -C ./out.gn/x64.release"
 
 WORKDIR /out
 RUN tar --use-compress-program=zstd -cvf v8-src-db.tar.zst -C /app/v8 v8-src-db
