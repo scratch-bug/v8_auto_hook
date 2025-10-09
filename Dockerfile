@@ -64,7 +64,7 @@ WORKDIR /app/v8
 RUN codeql database create v8-src-db \
       --language=cpp \
       --source-root=/app/v8 \
-      --command="ninja -C ./out.gn/x64.release"
+      --command="ninja -C ./out.gn/x64.release d8"
 
 WORKDIR /out
 RUN tar --use-compress-program=zstd -cvf v8-src-db.tar.zst -C /app/v8 v8-src-db
