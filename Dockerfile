@@ -6,11 +6,20 @@ ARG THREADS=4
 ARG V8_OUT=out.gn/x64.release
 ARG CODEQL_DB_DIR=/app/v8/v8-src-db
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential python3 python3-pip pkg-config \
-    ninja-build git curl unzip zstd ca-certificates \
-    lsb-release python-is-python3 file \
- && rm -rf /var/lib/apt/lists/*
+RUN apt-get clean && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/* && apt-get update -y
+RUN apt-get install -qq \
+    vim \
+    curl \
+    git \
+    lsb-release \
+    python3 \
+    python3-pip \
+    sudo \
+    file \
+    default-jdk \
+    lldb \
+    llvm \
+    unzip
 
 WORKDIR /app
 COPY . /app/v8
