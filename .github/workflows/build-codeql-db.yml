@@ -81,12 +81,10 @@ jobs:
           echo "CCACHE_MAXSIZE=2G" >> $GITHUB_ENV
           echo "PATH=/usr/lib/ccache:$PATH" >> $GITHUB_ENV
 
-      - name: GN gen (lean build)
+      - name: gen (lean build)
         working-directory: ${{ env.V8DIR }}
         run: |
-          gn gen $OUT_DIR --args='
-            is_debug=false
-          '
+          ./tools/dev/v8gen.py x64.release
 
       - name: Install CodeQL CLI
         run: |
