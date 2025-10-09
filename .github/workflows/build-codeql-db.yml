@@ -1,0 +1,60 @@
+name: Build CodeQL DB (Docker)
+
+on:
+  workflow_dispatch:
+    inputs:
+      threads:
+        description: "ninja/codeql threads"
+        required: false
+        default: "4"
+      codeql_version:
+        description: "CodeQL CLI version (e.g., 2.23.0)"
+        required: false
+        default: "2.23.0"
+      v8_out:
+        description: "V8 output dir (gn gen target)"
+        required: false
+        default: "out.gn/x64.release"
+
+  push:
+    paths:
+      - 'Dockerfile'
+      - '.github/workflows/build-codeql-db.yml'
+      - '**/*.h'
+      - '**/*.cc'
+      - 'tools/**'
+      - 'include/**'
+      - 'src/**'
+
+jobs:
+  build-db:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Build Docker image (CodeQL DB creator)
+        run: |
+          docker build \
+            --build-arg THREADS="${{ github.event.inputs.threads || 4 }}" \
+            --build-arg CODEQL_VERSION="${{ github.event.inputs.codeql_version || '2.23.0' }}" \
+            --build-arg V8_OUT="${{ github.event.inputs.v8_out || 'out.gn/x64.release' }}" \
+            -t v8-codeql-db:latest .
+
+      - name: Create container & copy artifact
+        run: |
+          cid=$(docker create v8-codeql-db:latest)
+          docker cp "$cid":/out/v8-src-db.tar.zst ./v8-src-db.tar.zst
+          docker rm "$cid"
+          ls -al ./v8-src-db.tar.zst
+
+      - name: Upload artifact (CodeQL DB tarball)
+        uses: actions/upload-artifact@v4
+        with:
+          name: v8-src-db
+          path: v8-src-db.tar.zst
+          if-no-files-found: error
