@@ -15,8 +15,26 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 COPY . /app/v8
 
-RUN git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git /opt/depot_tools
-ENV PATH="/opt/depot_tools:${PATH}"
+WORKDIR /tools
+RUN git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git
+ENV PATH="${PATH}:/tools/depot_tools"
+
+WORKDIR /setup
+RUN mkdir -p chromium/src/build
+
+WORKDIR /setup/chromium/src
+RUN curl -s https://chromium.googlesource.com/chromium/src/+/main/build/install-build-deps.sh?format=TEXT | base64 -d > build/install-build-deps.sh
+RUN chmod u+x build/install-build-deps.sh
+RUN curl -s https://chromium.googlesource.com/chromium/src/+/main/build/install-build-deps.py?format=TEXT | base64 -d > build/install-build-deps.py
+RUN chmod u+x build/install-build-deps.py
+
+RUN ./build/install-build-deps.sh \
+    --no-prompt \
+    --no-chromeos-fonts \
+    --no-arm \
+    --no-syms \
+    --no-nacl \
+    --no-backwards-compatible
 
 WORKDIR /app/v8
 RUN gclient sync
