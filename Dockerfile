@@ -21,8 +21,7 @@ RUN apt-get install -qq \
     llvm \
     unzip
 
-WORKDIR /app
-COPY . /app/v8
+
 
 WORKDIR /tools
 RUN git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git
@@ -45,12 +44,14 @@ RUN ./build/install-build-deps.sh \
     --no-nacl \
     --no-backwards-compatible
 
-WORKDIR /app/v8
+WORKDIR /app
+COPY . /app/v8
 
 RUN gclient config --unmanaged --name v8 https://chromium.googlesource.com/v8/v8
 RUN gclient sync -D --no-history --shallow
 RUN gclient runhooks
 
+WORKDIR /app/v8
 RUN ./tools/dev/v8gen.py x64.release
 
 WORKDIR /tools
