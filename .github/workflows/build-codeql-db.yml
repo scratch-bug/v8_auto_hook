@@ -22,8 +22,8 @@ concurrency:
 
 jobs:
   build-db:
-    runs-on: self-hosted   # ← 서버 등록 시 준 라벨과 일치해야 함
-    timeout-minutes: 0                                # ← 사실상 무제한(조직 정책에 맞게)
+    runs-on: self-hosted
+    timeout-minutes: 0
 
     steps:
       - name: Checkout
@@ -31,12 +31,12 @@ jobs:
         with:
           fetch-depth: 0
 
-      # 서버에 이미 패키지들이 있다면 이 스텝은 제거 가능
+      # (선택) self-hosted에 이미 있으면 생략 가능
       - name: APT deps (optional on self-hosted)
         run: |
-          which ninja || (sudo apt-get update && sudo apt-get install -y ninja-build)
-          which rsync || sudo apt-get install -y rsync
-          which unzip || sudo apt-get install -y unzip
+          which ninja  || (sudo apt-get update && sudo apt-get install -y ninja-build)
+          which rsync  || sudo apt-get install -y rsync
+          which unzip  || sudo apt-get install -y unzip
           true
 
       - name: depot_tools
@@ -46,7 +46,6 @@ jobs:
           fi
           echo "$RUNNER_TEMP/depot_tools" >> $GITHUB_PATH
 
-      # ★ 중요: depot_tools Python(CIPD) 부트스트랩 — 한 번은 반드시
       - name: Bootstrap depot_tools Python (CIPD)
         env:
           DEPOT_TOOLS_UPDATE: "1"
@@ -55,11 +54,11 @@ jobs:
           gclient --version || true
           vpython3 -V || true
 
-      - name: Mirror repository to /app/v8
+      # ✅ sudo 없이 /home/runner/app 사용
+      - name: Mirror repository to /home/runner/app
         run: |
-          APP="/app"
-          sudo mkdir -p "$APP"
-          sudo chown "$USER":"$USER" "$APP"
+          APP="/home/runner/app"
+          mkdir -p "$APP"
           rsync -a "$GITHUB_WORKSPACE"/ "$APP/v8"/
           echo "APPDIR=$APP" >> $GITHUB_ENV
           echo "V8DIR=$APP/v8" >> $GITHUB_ENV
@@ -76,8 +75,7 @@ jobs:
         working-directory: ${{ env.V8DIR }}
         run: python3 tools/clang/scripts/update.py
 
-      # ccache는 GN args에 cc_wrapper를 주지 않으면 실효가 거의 없습니다.
-      # 그대로 두어도 무해하지만, 공간/시간 아끼려면 제거 가능.
+      # (옵션) ccache — GN args에 cc_wrapper를 안 주므로 체감 이득은 제한적
       - name: Cache ccache (optional)
         uses: actions/cache@v4
         with:
@@ -95,7 +93,6 @@ jobs:
         working-directory: ${{ env.V8DIR }}
         run: ./tools/dev/v8gen.py x64.release
 
-      # 서버에 codeql이 이미 있다면 설치 스텝을 '존재 시 스킵' 처리
       - name: Install CodeQL CLI (skip if present)
         run: |
           if ! command -v codeql >/dev/null 2>&1; then
@@ -110,10 +107,9 @@ jobs:
       - name: Build CodeQL DB (ninja d8)
         working-directory: ${{ env.V8DIR }}
         env:
-          CODEQL_RAM: "16384"     # 서버 메모리에 맞게 상향(예: 16GB)
-          CODEQL_THREADS: "4"     # 코어 수에 맞게(예: 8c면 4~6)
+          CODEQL_RAM: "16384"
+          CODEQL_THREADS: "4"
         run: |
-          # 서버 코어수에 비례하여 병렬도 조정(링크 OOM 나면 -j/-l 낮추세요)
           J=$(( $(nproc) / 2 )); [ $J -ge 4 ] || J=4
           L=$J
           codeql database create "${DB_NAME}" \
