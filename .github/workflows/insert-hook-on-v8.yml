@@ -66,4 +66,4 @@ jobs:
         run: |
           J=$(( $(nproc) / 2 )); [ $J -ge 2 ] || J=2
           echo "Using -j$J -l$J"
-          ninja -C out/Debug d8 -j"$J" -l"$J"
+          ninja -C out.gn/x64.debug d8 -j"$J" -l"$J"
