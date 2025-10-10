@@ -1,0 +1,71 @@
+name: insert-hooks-and-build-d8
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  insert-and-build:
+    runs-on: self-hosted
+    timeout-minutes: 0
+
+    env:
+      BQRS_DIR: "/home/runner/app/bqrs"
+      HOOK_TOOL_DIR: "/home/runner/app/hook_tool"
+      INSERT_HOOK: "/home/runner/app/hook_tool/insert_hook.py"
+      V8SRC: "/home/runner/v8"         # --root ~/v8
+      REMAP: "/app/v8=/home/runner/v8" # --remap /app/v8=~/v8
+      V8BUILD: "/home/runner/app/v8"   # 빌드는 ~/app/v8에서
+      CODEQL_ALLOW_INSTALLATION_ANYWHERE: "true"
+
+    steps:
+      - name: Show context
+        shell: bash
+        run: |
+          whoami
+          python3 --version || true
+          echo "BQRS_DIR=$BQRS_DIR"
+          echo "HOOK_TOOL_DIR=$HOOK_TOOL_DIR"
+          echo "V8SRC=$V8SRC"
+          echo "V8BUILD=$V8BUILD"
+
+      - name: Sanity check directories
+        shell: bash
+        run: |
+          test -d "$BQRS_DIR"    || { echo "::error::No BQRS_DIR at $BQRS_DIR"; exit 1; }
+          test -d "$HOOK_TOOL_DIR" || { echo "::error::No HOOK_TOOL_DIR at $HOOK_TOOL_DIR"; exit 1; }
+          test -f "$INSERT_HOOK" || { echo "::error::insert_hook.py not found at $INSERT_HOOK"; exit 1; }
+          test -d "$V8SRC"       || { echo "::error::V8SRC not found at $V8SRC"; exit 1; }
+          test -d "$V8BUILD"     || { echo "::error::V8BUILD not found at $V8BUILD"; exit 1; }
+
+      - name: Run insert_hook.py for all BQRS
+        shell: bash
+        working-directory: /home/runner/app
+        run: |
+          shopt -s globstar nullglob
+          cnt=0
+          # ~/app/bqrs 아래 모든 .bqrs 파일 순회
+          for b in "$BQRS_DIR"/**/*.bqrs; do
+            rel="${b#"$BQRS_DIR"/}"
+            echo "[hook] $rel"
+            python3 "$INSERT_HOOK" "$b" --root "$V8SRC" --remap "$REMAP"
+            cnt=$((cnt+1))
+          done
+          echo "Total processed: $cnt"
+          if [ $cnt -eq 0 ]; then
+            echo "::warning::No .bqrs files found under $BQRS_DIR"
+          fi
+
+      - name: Build d8 with ninja (out/Debug)
+        shell: bash
+        working-directory: /home/runner/app/v8
+        env:
+          J: ${{ env.JOB_CPUS }}
+        run: |
+          # nproc 기반 병렬도 산정(과도하면 링크 OOM 날 수 있으니 필요시 낮추세요)
+          J=$(( $(nproc) / 2 )); [ $J -ge 2 ] || J=2
+          echo "Using -j$J -l$J"
+          ninja -C out/Debug d8 -j"$J" -l"$J"
