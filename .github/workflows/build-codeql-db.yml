@@ -2,9 +2,6 @@ name: build-codeql-db
 
 on:
   workflow_dispatch:
-  push:
-    paths:
-      - '.github/workflows/build-codeql-db.yml'
 
 env:
   CODEQL_VERSION: "2.23.0"
@@ -54,14 +51,15 @@ jobs:
           gclient --version || true
           vpython3 -V || true
 
-      # ✅ sudo 없이 /home/runner/app 사용
-      - name: Mirror repository to /home/runner/app
+      # ✅ 완전 제거 후 깨끗하게 미러링 + 경로 고정
+      - name: Mirror repository to /home/runner/app (clean)
         run: |
           APP="/home/runner/app"
-          mkdir -p "$APP"
-          rsync -a "$GITHUB_WORKSPACE"/ "$APP/v8"/
+          mkdir -p "$APP/v8"
+          rsync -a --delete "$GITHUB_WORKSPACE"/ "$APP/v8"/
           echo "APPDIR=$APP" >> $GITHUB_ENV
           echo "V8DIR=$APP/v8" >> $GITHUB_ENV
+          echo "DBDIR=$APP/${DB_NAME}" >> $GITHUB_ENV
           ls -la "$APP/v8" | head -n 50
 
       - name: gclient config / sync / runhooks (unmanaged)
@@ -104,6 +102,7 @@ jobs:
       - name: Verify CodeQL
         run: codeql --version
 
+      # DB를 /home/runner/app/<DB_NAME> 에 생성
       - name: Build CodeQL DB (ninja d8)
         working-directory: ${{ env.V8DIR }}
         env:
@@ -112,24 +111,19 @@ jobs:
         run: |
           J=$(( $(nproc) / 2 )); [ $J -ge 4 ] || J=4
           L=$J
-          codeql database create "${DB_NAME}" \
+          codeql database create "${DBDIR}" \
             --language=cpp \
             --source-root="${{ env.V8DIR }}" \
             --command="ninja -C ./${OUT_DIR} d8 -j${J} -l${L}"
 
-      - name: Show ccache stats (optional)
-        if: always()
-        run: ccache -s || true
-
       - name: Package DB (zstd)
-        working-directory: ${{ env.V8DIR }}
         run: |
-          tar -I 'zstd -T0 -3' -cvf ${DB_NAME}.tar.zst ${DB_NAME}
-          ls -lh ${DB_NAME}.tar.zst
+          tar -I 'zstd -T0 -3' -cvf "${DBDIR}.tar.zst" -C "$(dirname "${DBDIR}")" "$(basename "${DBDIR}")"
+          ls -lh "${DBDIR}.tar.zst"
 
-      - name: Upload artifact
+      - name: Upload artifact (optional)
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.DB_NAME }}-${{ github.sha }}
-          path: ${{ env.V8DIR }}/${{ env.DB_NAME }}.tar.zst
+          path: ${{ env.APPDIR }}/${{ env.DB_NAME }}.tar.zst
           if-no-files-found: error

@@ -1,0 +1,110 @@
+name: run-ql-on-updated-db
+
+on:
+  workflow_run:
+    workflows: ["build-codeql-db"]   # build DB 워크플로 이름과 정확히 일치
+    types: [completed]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  query-all:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    runs-on: self-hosted
+    timeout-minutes: 0
+
+    env:
+      DB_DIR: "/home/runner/app/v8-src-db"
+      QL_DIR: "/home/runner/app/ql"
+      OUT_BQRS: "/home/runner/app/bqrs"
+      HASH_MARKER: "/home/runner/app/.v8_db_hash"
+      CODEQL_RAM: "16384"
+      CODEQL_THREADS: "4"
+
+    steps:
+      - name: Show context
+        run: |
+          echo "Triggered by: $GITHUB_EVENT_NAME"
+          whoami
+          id
+          ls -la "$DB_DIR" || true
+
+      # 레포 체크아웃이 꼭 필요하진 않지만, ql 폴더를 레포에서 동기화해 쓰는 경우 대비
+      - name: Checkout (optional if ql is not in repo)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # CodeQL CLI가 시스템에 있으면 스킵
+      - name: Install CodeQL CLI (skip if present)
+        run: |
+          if ! command -v codeql >/dev/null 2>&1; then
+            CODEQL_VERSION="2.23.0"
+            curl -L -o codeql.zip "https://github.com/github/codeql-cli-binaries/releases/download/v${CODEQL_VERSION}/codeql-linux64.zip"
+            unzip -q codeql.zip -d "$RUNNER_TEMP"
+            echo "$RUNNER_TEMP/codeql" >> $GITHUB_PATH
+          fi
+          codeql --version
+
+      - name: Verify DB exists
+        run: |
+          test -d "$DB_DIR" || { echo "::error::DB not found at $DB_DIR"; exit 1; }
+          test -f "$DB_DIR/codeql-database.yml" || { echo "::error::Invalid CodeQL DB (missing codeql-database.yml)"; exit 1; }
+
+      # DB 변경 감지: codeql-database.yml 해시 비교
+      - name: Skip if DB unchanged
+        id: dbhash
+        run: |
+          cur=$(sha256sum "$DB_DIR/codeql-database.yml" | awk '{print $1}')
+          echo "current_hash=$cur" >> $GITHUB_OUTPUT
+          if [ -f "$HASH_MARKER" ] && [ "$cur" = "$(cat "$HASH_MARKER")" ]; then
+            echo "No DB change detected. Skipping."
+            echo "skip=true" >> $GITHUB_OUTPUT
+          else
+            echo "$cur" > "$HASH_MARKER"
+            echo "skip=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Install packs for ql/
+        if: ${{ steps.dbhash.outputs.skip != 'true' }}
+        run: |
+          if [ -d "$QL_DIR" ]; then
+            cd "$QL_DIR"
+            if [ -f qlpack.yml ] || [ -f codeql-pack.yml ]; then
+              codeql pack install
+            else
+              echo "No qlpack.yml in $QL_DIR — running raw queries."
+            fi
+          else
+            echo "::error::QL_DIR not found: $QL_DIR"
+            exit 1
+          fi
+
+      - name: Run all .ql -> .bqrs
+        if: ${{ steps.dbhash.outputs.skip != 'true' }}
+        env:
+          DB_DIR: "/home/runner/app/v8-src-db"
+          QL_DIR: "/home/runner/app/ql"
+          OUT_BQRS: "/home/runner/app/bqrs"
+        run: |
+          mkdir -p "$OUT_BQRS"
+          shopt -s globstar nullglob
+          count=0
+          for q in "$QL_DIR"/**/*.ql; do
+            rel="${q#"$QL_DIR"/}"
+            out="$OUT_BQRS/${rel%.ql}.bqrs"
+            mkdir -p "$(dirname "$out")"
+            echo "[CodeQL] $rel -> ${out#$OUT_BQRS/}"
+            codeql query run --database "$DB_DIR" --output "$out" "$q"
+            count=$((count+1))
+          done
+          echo "Total queries executed: $count"
+
+      # (선택) 결과 확인용 디렉터리 트리
+      - name: List BQRS tree
+        if: ${{ steps.dbhash.outputs.skip != 'true' }}
+        run: |
+          find "$OUT_BQRS" -type f -name '*.bqrs' | head -n 200 || true
