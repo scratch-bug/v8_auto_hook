@@ -5,9 +5,6 @@ on:
   push:
     paths:
       - '.github/workflows/build-codeql-db.yml'
-      - 'src/**'
-      - 'include/**'
-      - 'third_party/**'
 
 env:
   CODEQL_VERSION: "2.23.0"
@@ -25,8 +22,8 @@ concurrency:
 
 jobs:
   build-db:
-    runs-on: ubuntu-latest
-    timeout-minutes: 360
+    runs-on: self-hosted   # ← 서버 등록 시 준 라벨과 일치해야 함
+    timeout-minutes: 0                                # ← 사실상 무제한(조직 정책에 맞게)
 
     steps:
       - name: Checkout
@@ -34,18 +31,29 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: APT deps
+      # 서버에 이미 패키지들이 있다면 이 스텝은 제거 가능
+      - name: APT deps (optional on self-hosted)
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            build-essential python3 python3-venv python3-pip \
-            ninja-build git curl unzip zstd file lsb-release \
-            default-jdk lldb llvm ccache rsync
+          which ninja || (sudo apt-get update && sudo apt-get install -y ninja-build)
+          which rsync || sudo apt-get install -y rsync
+          which unzip || sudo apt-get install -y unzip
+          true
 
       - name: depot_tools
         run: |
-          git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git "$RUNNER_TEMP/depot_tools"
+          if [ ! -d "$RUNNER_TEMP/depot_tools" ]; then
+            git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git "$RUNNER_TEMP/depot_tools"
+          fi
           echo "$RUNNER_TEMP/depot_tools" >> $GITHUB_PATH
+
+      # ★ 중요: depot_tools Python(CIPD) 부트스트랩 — 한 번은 반드시
+      - name: Bootstrap depot_tools Python (CIPD)
+        env:
+          DEPOT_TOOLS_UPDATE: "1"
+        run: |
+          update_depot_tools
+          gclient --version || true
+          vpython3 -V || true
 
       - name: Mirror repository to /app/v8
         run: |
@@ -68,42 +76,52 @@ jobs:
         working-directory: ${{ env.V8DIR }}
         run: python3 tools/clang/scripts/update.py
 
-      - name: Cache ccache
+      # ccache는 GN args에 cc_wrapper를 주지 않으면 실효가 거의 없습니다.
+      # 그대로 두어도 무해하지만, 공간/시간 아끼려면 제거 가능.
+      - name: Cache ccache (optional)
         uses: actions/cache@v4
         with:
           path: ~/.cache/ccache
           key: ccache-${{ runner.os }}-${{ hashFiles('**/*.gn','**/*.gni','DEPS') }}
           restore-keys: ccache-${{ runner.os }}-
 
-      - name: Configure ccache env
+      - name: Configure ccache env (optional)
         run: |
           echo "CCACHE_DIR=$HOME/.cache/ccache" >> $GITHUB_ENV
           echo "CCACHE_MAXSIZE=2G" >> $GITHUB_ENV
           echo "PATH=/usr/lib/ccache:$PATH" >> $GITHUB_ENV
 
-      - name: gen (lean build)
+      - name: gen (default args; no change)
         working-directory: ${{ env.V8DIR }}
-        run: |
-          ./tools/dev/v8gen.py x64.release
+        run: ./tools/dev/v8gen.py x64.release
 
-      - name: Install CodeQL CLI
+      # 서버에 codeql이 이미 있다면 설치 스텝을 '존재 시 스킵' 처리
+      - name: Install CodeQL CLI (skip if present)
         run: |
-          curl -L -o codeql.zip "https://github.com/github/codeql-cli-binaries/releases/download/v${CODEQL_VERSION}/codeql-linux64.zip"
-          unzip -q codeql.zip -d "$RUNNER_TEMP"
-          echo "$RUNNER_TEMP/codeql" >> $GITHUB_PATH
+          if ! command -v codeql >/dev/null 2>&1; then
+            curl -L -o codeql.zip "https://github.com/github/codeql-cli-binaries/releases/download/v${CODEQL_VERSION}/codeql-linux64.zip"
+            unzip -q codeql.zip -d "$RUNNER_TEMP"
+            echo "$RUNNER_TEMP/codeql" >> $GITHUB_PATH
+          fi
 
       - name: Verify CodeQL
         run: codeql --version
 
       - name: Build CodeQL DB (ninja d8)
         working-directory: ${{ env.V8DIR }}
+        env:
+          CODEQL_RAM: "16384"     # 서버 메모리에 맞게 상향(예: 16GB)
+          CODEQL_THREADS: "4"     # 코어 수에 맞게(예: 8c면 4~6)
         run: |
+          # 서버 코어수에 비례하여 병렬도 조정(링크 OOM 나면 -j/-l 낮추세요)
+          J=$(( $(nproc) / 2 )); [ $J -ge 4 ] || J=4
+          L=$J
           codeql database create "${DB_NAME}" \
             --language=cpp \
             --source-root="${{ env.V8DIR }}" \
-            --command="ninja -C ./${OUT_DIR} d8 -j2 -l2"
+            --command="ninja -C ./${OUT_DIR} d8 -j${J} -l${L}"
 
-      - name: Show ccache stats
+      - name: Show ccache stats (optional)
         if: always()
         run: ccache -s || true
 
