@@ -24,7 +24,7 @@ jobs:
       CODEQL_RAM: "16384"
       CODEQL_THREADS: "4"
       # CodeQL 절대경로(환경에 맞게 수정)
-      CODEQL: "/home/runner/tools/codeql/codeql"
+      CODEQL: "/home/runner/codeql/codeql"
 
     steps:
       - name: Show context
