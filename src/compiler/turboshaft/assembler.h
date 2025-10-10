@@ -2344,6 +2344,12 @@ class TurboshaftAssemblerOpInterface
                                                          input_assumptions);
   }
 
+  V<Word32> ConvertBooleanToWord32(V<Boolean> boolean) {
+    return V<Word32>::Cast(ConvertJSPrimitiveToUntagged(
+        boolean, ConvertJSPrimitiveToUntaggedOp::UntaggedKind::kBit,
+        ConvertJSPrimitiveToUntaggedOp::InputAssumptions::kBoolean));
+  }
+
   V<Untagged> ConvertJSPrimitiveToUntaggedOrDeopt(
       V<Object> object, V<turboshaft::FrameState> frame_state,
       ConvertJSPrimitiveToUntaggedOrDeoptOp::JSPrimitiveKind from_kind,
@@ -3828,12 +3834,17 @@ class TurboshaftAssemblerOpInterface
     }
     auto arguments = builtin::ArgumentsToVector(args);
     V<WordPtr> call_target = RelocatableWasmBuiltinCallTarget(Desc::kFunction);
-    return result_t::Cast(Call(call_target,
-                               OptionalV<turboshaft::FrameState>::Nullopt(),
-                               base::VectorOf(arguments),
-                               Desc::Create(StubCallMode::kCallWasmRuntimeStub,
-                                            Asm().output_graph().graph_zone()),
-                               Desc::kEffects));
+    auto result =
+        Call(call_target, OptionalV<turboshaft::FrameState>::Nullopt(),
+             base::VectorOf(arguments),
+             Desc::Create(StubCallMode::kCallWasmRuntimeStub,
+                          Asm().output_graph().graph_zone()),
+             Desc::kEffects);
+    if constexpr (requires { result_t::Cast(result); }) {
+      return result_t::Cast(result);
+    } else {
+      return result;
+    }
   }
 
   template <typename Desc>
@@ -5149,11 +5160,15 @@ class TurboshaftAssemblerOpInterface
 
   V<Word32> WasmTypeCheck(V<Object> object, OptionalV<Map> rtt,
                           WasmTypeCheckConfig config) {
+    DCHECK(__ generating_unreachable_operations() ||
+           rtt.valid() != config.to.is_abstract_ref());
     return ReduceIfReachableWasmTypeCheck(object, rtt, config);
   }
 
   V<Object> WasmTypeCast(V<Object> object, OptionalV<Map> rtt,
                          WasmTypeCheckConfig config) {
+    DCHECK(__ generating_unreachable_operations() ||
+           rtt.valid() != config.to.is_abstract_ref());
     return ReduceIfReachableWasmTypeCast(object, rtt, config);
   }
 
@@ -5166,7 +5181,9 @@ class TurboshaftAssemblerOpInterface
   }
 
   template <typename T>
-  V<T> AnnotateWasmType(V<T> value, const wasm::ValueType type) {
+  V<T> AnnotateWasmType(V<T> value, const wasm::ValueType type)
+    requires(is_subtype_v<T, Object>)
+  {
     return ReduceIfReachableWasmTypeAnnotation(value, type);
   }
 

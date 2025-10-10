@@ -2819,9 +2819,11 @@ class GraphBuildingNodeProcessor {
         node->eager_deopt_info()->feedback_to_update());
     RETURN_IF_UNREACHABLE();
 
-    SetMap(node,
-           __ NewArray(__ ChangeUint32ToUintPtr(length),
-                       NewArrayOp::Kind::kObject, node->allocation_type()));
+    NewArrayOp::Kind kind = IsDoubleElementsKind(node->elements_kind())
+                                ? NewArrayOp::Kind::kDouble
+                                : NewArrayOp::Kind::kObject;
+    SetMap(node, __ NewArray(__ ChangeUint32ToUintPtr(length), kind,
+                             node->allocation_type()));
     return maglev::ProcessResult::kContinue;
   }
 
@@ -4310,12 +4312,12 @@ class GraphBuildingNodeProcessor {
                                 const maglev::ProcessingState& state) {
     FloatUnaryOp::Kind kind;
     switch (node->ieee_function()) {
-#define CASE(MathName, ExpName, EnumName)                         \
+#define IEEE_UNARY_CASE(MathName, ExpName, EnumName)              \
   case maglev::Float64Ieee754Unary::Ieee754Function::k##EnumName: \
     kind = FloatUnaryOp::Kind::k##EnumName;                       \
     break;
-      IEEE_754_UNARY_LIST(CASE)
-#undef CASE
+      IEEE_754_UNARY_LIST(IEEE_UNARY_CASE)
+#undef IEEE_UNARY_CASE
     }
     SetMap(node, __ Float64Unary(Map(node->input()), kind));
     return maglev::ProcessResult::kContinue;
@@ -4325,12 +4327,12 @@ class GraphBuildingNodeProcessor {
                                 const maglev::ProcessingState& state) {
     FloatBinopOp::Kind kind;
     switch (node->ieee_function()) {
-#define CASE(MathName, ExpName, EnumName)                          \
+#define IEEE_BINARY_CASE(MathName, ExpName, EnumName)              \
   case maglev::Float64Ieee754Binary::Ieee754Function::k##EnumName: \
     kind = FloatBinopOp::Kind::k##EnumName;                        \
     break;
-      IEEE_754_BINARY_LIST(CASE)
-#undef CASE
+      IEEE_754_BINARY_LIST(IEEE_BINARY_CASE)
+#undef IEEE_BINARY_CASE
     }
     SetMap(node, __ Float64Binary(Map(node->input_lhs()),
                                   Map(node->input_rhs()), kind));
@@ -4552,6 +4554,19 @@ class GraphBuildingNodeProcessor {
     return maglev::ProcessResult::kContinue;
   }
 
+  maglev::ProcessResult Process(maglev::CheckedNumberToFloat64* node,
+                                const maglev::ProcessingState& state) {
+    GET_FRAME_STATE_MAYBE_ABORT(frame_state, node->eager_deopt_info());
+    ConvertJSPrimitiveToUntaggedOrDeoptOp::JSPrimitiveKind kind =
+        ConvertJSPrimitiveToUntaggedOrDeoptOp::JSPrimitiveKind::kNumber;
+    SetMap(node,
+           __ ConvertJSPrimitiveToUntaggedOrDeopt(
+               Map(node->input()), frame_state, kind,
+               ConvertJSPrimitiveToUntaggedOrDeoptOp::UntaggedKind::kFloat64,
+               CheckForMinusZeroMode::kCheckForMinusZero,
+               node->eager_deopt_info()->feedback_to_update()));
+    return maglev::ProcessResult::kContinue;
+  }
   maglev::ProcessResult Process(maglev::CheckedNumberOrOddballToFloat64* node,
                                 const maglev::ProcessingState& state) {
     GET_FRAME_STATE_MAYBE_ABORT(frame_state, node->eager_deopt_info());
@@ -4618,6 +4633,18 @@ class GraphBuildingNodeProcessor {
 #endif  // V8_ENABLE_UNDEFINED_DOUBLE
             CheckForMinusZeroMode::kCheckForMinusZero,
             node->eager_deopt_info()->feedback_to_update()));
+    return maglev::ProcessResult::kContinue;
+  }
+  maglev::ProcessResult Process(maglev::UncheckedNumberToFloat64* node,
+                                const maglev::ProcessingState& state) {
+    // `node->conversion_type()` doesn't matter here, since for both HeapNumbers
+    // and Oddballs, the Float64 value is at the same index (and this node never
+    // deopts, regardless of its input).
+    SetMap(node, __ ConvertJSPrimitiveToUntagged(
+                     Map(node->input()),
+                     ConvertJSPrimitiveToUntaggedOp::UntaggedKind::kFloat64,
+                     ConvertJSPrimitiveToUntaggedOp::InputAssumptions::
+                         kNumberOrOddball));
     return maglev::ProcessResult::kContinue;
   }
   maglev::ProcessResult Process(maglev::UncheckedNumberOrOddballToFloat64* node,
