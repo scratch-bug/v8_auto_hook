@@ -69,7 +69,7 @@ jobs:
         run: |
           if [ ! -f codeql-pack.yml ] && [ ! -f qlpack.yml ]; then
             {
-              echo 'name: scratch-bug.v8-custom-queries'
+              echo 'name: scratch-bug/v8-custom-queries'
               echo 'version: 0.0.1'
               echo 'library: false'
               echo 'extractor: cpp'
