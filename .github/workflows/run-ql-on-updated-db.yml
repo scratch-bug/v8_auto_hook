@@ -2,7 +2,7 @@ name: run-ql-on-updated-db
 
 on:
   workflow_run:
-    workflows: ["build-codeql-db"]   # build DB 워크플로 이름과 정확히 일치
+    workflows: ["build-codeql-db"]
     types: [completed]
   workflow_dispatch:
 
@@ -23,6 +23,8 @@ jobs:
       HASH_MARKER: "/home/runner/app/.v8_db_hash"
       CODEQL_RAM: "16384"
       CODEQL_THREADS: "4"
+      # CodeQL 절대경로(환경에 맞게 수정)
+      CODEQL: "/home/runner/tools/codeql/codeql"
 
     steps:
       - name: Show context
@@ -32,29 +34,21 @@ jobs:
           id
           ls -la "$DB_DIR" || true
 
-      # 레포 체크아웃이 꼭 필요하진 않지만, ql 폴더를 레포에서 동기화해 쓰는 경우 대비
       - name: Checkout (optional if ql is not in repo)
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      # CodeQL CLI가 시스템에 있으면 스킵
-      - name: Install CodeQL CLI (skip if present)
+      - name: Verify CodeQL binary
         run: |
-          if ! command -v codeql >/dev/null 2>&1; then
-            CODEQL_VERSION="2.23.0"
-            curl -L -o codeql.zip "https://github.com/github/codeql-cli-binaries/releases/download/v${CODEQL_VERSION}/codeql-linux64.zip"
-            unzip -q codeql.zip -d "$RUNNER_TEMP"
-            echo "$RUNNER_TEMP/codeql" >> $GITHUB_PATH
-          fi
-          codeql --version
+          test -x "$CODEQL" || { echo "::error::CODEQL not executable at $CODEQL"; exit 1; }
+          "$CODEQL" --version
 
       - name: Verify DB exists
         run: |
           test -d "$DB_DIR" || { echo "::error::DB not found at $DB_DIR"; exit 1; }
           test -f "$DB_DIR/codeql-database.yml" || { echo "::error::Invalid CodeQL DB (missing codeql-database.yml)"; exit 1; }
 
-      # DB 변경 감지: codeql-database.yml 해시 비교
       - name: Skip if DB unchanged
         id: dbhash
         run: |
@@ -74,7 +68,7 @@ jobs:
           if [ -d "$QL_DIR" ]; then
             cd "$QL_DIR"
             if [ -f qlpack.yml ] || [ -f codeql-pack.yml ]; then
-              codeql pack install
+              "$CODEQL" pack install
             else
               echo "No qlpack.yml in $QL_DIR — running raw queries."
             fi
@@ -98,12 +92,11 @@ jobs:
             out="$OUT_BQRS/${rel%.ql}.bqrs"
             mkdir -p "$(dirname "$out")"
             echo "[CodeQL] $rel -> ${out#$OUT_BQRS/}"
-            codeql query run --database "$DB_DIR" --output "$out" "$q"
+            "$CODEQL" query run --database "$DB_DIR" --output "$out" "$q"
             count=$((count+1))
           done
           echo "Total queries executed: $count"
 
-      # (선택) 결과 확인용 디렉터리 트리
       - name: List BQRS tree
         if: ${{ steps.dbhash.outputs.skip != 'true' }}
         run: |
