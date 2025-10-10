@@ -12,7 +12,6 @@ concurrency:
 
 jobs:
   query-all:
-    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: self-hosted
     timeout-minutes: 0
 
@@ -21,7 +20,6 @@ jobs:
       QL_DIR_SRC: "${{ github.workspace }}/ql"
       QL_DIR_DST: "/home/runner/app/ql"
       OUT_BQRS: "/home/runner/app/bqrs"
-      HASH_MARKER: "/home/runner/app/.v8_db_hash"
       CODEQL_RAM: "16384"
       CODEQL_THREADS: "4"
       CODEQL: "/home/runner/codeql/codeql"
@@ -49,17 +47,21 @@ jobs:
           test -d "$DB_DIR" || { echo "::error::DB not found at $DB_DIR"; exit 1; }
           test -f "$DB_DIR/codeql-database.yml" || { echo "::error::Invalid CodeQL DB (missing codeql-database.yml)"; exit 1; }
 
-      # 레포의 ql/ → ~/app/ql : 삭제 없이 갱신만 덮어쓰기
-      - name: Sync ql/ to /home/runner/app/ql (no delete)
-        if: ${{ steps.dbhash.outputs.skip != 'true' }}
+      # 🔁 ~/app/ql을 싹 비우고 레포의 ql/로 클린 복사
+      - name: Clean and copy ql/ to /home/runner/app/ql
+        shell: bash
         run: |
           if [ ! -d "$QL_DIR_SRC" ]; then
             echo "::error::No ql/ directory in repo at $QL_DIR_SRC"
             exit 1
           fi
           mkdir -p "$QL_DIR_DST"
-          rsync -a "$QL_DIR_SRC"/ "$QL_DIR_DST"/
-          echo "Synced (no delete):"
+          # 안전하게 목적지만 비우기
+          find "$QL_DIR_DST" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+          # 또는 rsync로 원본 기준 정리하고 싶으면 아래 한 줄만 사용:
+          # rsync -a --delete "$QL_DIR_SRC"/ "$QL_DIR_DST"/
+          cp -a "$QL_DIR_SRC"/. "$QL_DIR_DST"/
+          echo "Synced (clean):"
           find "$QL_DIR_DST" -maxdepth 2 -type f -name '*.ql' | head -n 50 || true
 
       # ~/app/ql에 codeql-pack.yml 없으면 생성 후 pack install
@@ -69,7 +71,7 @@ jobs:
         run: |
           if [ ! -f codeql-pack.yml ] && [ ! -f qlpack.yml ]; then
             {
-              echo 'name: scratch-bug/v8-custom-queries'
+              echo 'name: scratch-bug-v8-custom-queries'
               echo 'version: 0.0.1'
               echo 'library: false'
               echo 'extractor: cpp'
@@ -82,12 +84,12 @@ jobs:
           "$CODEQL" pack install
 
       - name: Run all .ql -> .bqrs (skip empty results)
-        if: ${{ steps.dbhash.outputs.skip != 'true' }}
         env:
           DB_DIR: "/home/runner/app/v8-src-db"
           QL_DIR: "/home/runner/app/ql"
           OUT_BQRS: "/home/runner/app/bqrs"
           CODEQL: "/home/runner/codeql/codeql"
+        shell: bash
         run: |
           export CODEQL_ALLOW_INSTALLATION_ANYWHERE=true
           BUNDLED="$CODEQL/bundled/packs"
@@ -110,7 +112,7 @@ jobs:
               --output "$tmp" \
               "$q" || { echo "::error::run failed: $rel"; rm -f "$tmp"; exit 1; }
 
-            # 빈 결과면 버린다 (헤더만 있는 경우)
+            # 빈 결과는 저장 안 함 (헤더만 있는 경우)
             lines=$("$CODEQL" bqrs decode --format=csv "$tmp" | wc -l | tr -d ' ')
             if [ "${lines:-0}" -le 1 ]; then
               echo "  -> empty result, dropping"
@@ -125,6 +127,5 @@ jobs:
           echo "Total queries: $count_total, kept(non-empty): $count_kept"
 
       - name: List BQRS tree
-        if: ${{ steps.dbhash.outputs.skip != 'true' }}
         run: |
           find "$OUT_BQRS" -type f -name '*.bqrs' | head -n 200 || true
