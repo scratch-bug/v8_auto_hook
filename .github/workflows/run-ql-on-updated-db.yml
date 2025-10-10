@@ -49,8 +49,22 @@ jobs:
           test -d "$DB_DIR" || { echo "::error::DB not found at $DB_DIR"; exit 1; }
           test -f "$DB_DIR/codeql-database.yml" || { echo "::error::Invalid CodeQL DB (missing codeql-database.yml)"; exit 1; }
 
-      # 레포의 ql/ → ~/app/ql 로 클린 미러링
-      - name: Sync ql/ from repo to /home/runner/app/ql (clean)
+      # DB 변경 여부 감지 (이전 해시와 비교)
+      - name: Skip if DB unchanged
+        id: dbhash
+        run: |
+          cur=$(sha256sum "$DB_DIR/codeql-database.yml" | awk '{print $1}')
+          echo "current_hash=$cur" >> $GITHUB_OUTPUT
+          if [ -f "$HASH_MARKER" ] && [ "$cur" = "$(cat "$HASH_MARKER")" ]; then
+            echo "No DB change detected. Skipping."
+            echo "skip=true" >> $GITHUB_OUTPUT
+          else
+            echo "$cur" > "$HASH_MARKER"
+            echo "skip=false" >> $GITHUB_OUTPUT
+          fi
+
+      # 레포의 ql/ → ~/app/ql : 삭제 없이 갱신만 덮어쓰기
+      - name: Sync ql/ to /home/runner/app/ql (no delete)
         if: ${{ steps.dbhash.outputs.skip != 'true' }}
         run: |
           if [ ! -d "$QL_DIR_SRC" ]; then
@@ -58,19 +72,28 @@ jobs:
             exit 1
           fi
           mkdir -p "$QL_DIR_DST"
-          rsync -a --delete "$QL_DIR_SRC"/ "$QL_DIR_DST"/
-          echo "Synced:"
+          rsync -a "$QL_DIR_SRC"/ "$QL_DIR_DST"/
+          echo "Synced (no delete):"
           find "$QL_DIR_DST" -maxdepth 2 -type f -name '*.ql' | head -n 50 || true
 
-      - name: Install packs for ql/
+      # ~/app/ql에 codeql-pack.yml 없으면 생성 후 pack install
+      - name: Ensure codeql-pack.yml and install packs
         if: ${{ steps.dbhash.outputs.skip != 'true' }}
         working-directory: ${{ env.QL_DIR_DST }}
         run: |
-          if [ -f qlpack.yml ] || [ -f codeql-pack.yml ]; then
-            "$CODEQL" pack install
-          else
-            echo "No qlpack.yml in $PWD — running raw queries."
+          if [ ! -f codeql-pack.yml ] && [ ! -f qlpack.yml ]; then
+            cat > codeql-pack.yml <<'YAML'
+            name: scratch-bug.v8-custom-queries
+            version: 0.0.1
+            library: false
+            extractor: cpp
+            dependencies:
+              codeql/cpp-all: "*"
+            YAML
+            echo "Created default codeql-pack.yml"
           fi
+          export CODEQL_ALLOW_INSTALLATION_ANYWHERE=true
+          "$CODEQL" pack install
 
       - name: Run all .ql -> .bqrs (skip empty results)
         if: ${{ steps.dbhash.outputs.skip != 'true' }}
@@ -80,6 +103,10 @@ jobs:
           OUT_BQRS: "/home/runner/app/bqrs"
           CODEQL: "/home/runner/codeql/codeql"
         run: |
+          export CODEQL_ALLOW_INSTALLATION_ANYWHERE=true
+          BUNDLED="$CODEQL/bundled/packs"
+          SEARCH_PATH="$QL_DIR:$HOME/.codeql/packages:$BUNDLED"
+
           mkdir -p "$OUT_BQRS"
           shopt -s globstar nullglob
           count_total=0
@@ -91,9 +118,13 @@ jobs:
             mkdir -p "$(dirname "$out")"
 
             echo "[CodeQL] $rel -> ${out#$OUT_BQRS/} (temp: $(basename "$tmp"))"
-            "$CODEQL" query run --database "$DB_DIR" --output "$tmp" "$q" || { echo "::error::run failed: $rel"; rm -f "$tmp"; exit 1; }
+            "$CODEQL" query run \
+              --database "$DB_DIR" \
+              --search-path "$SEARCH_PATH" \
+              --output "$tmp" \
+              "$q" || { echo "::error::run failed: $rel"; rm -f "$tmp"; exit 1; }
 
-            # 결과가 비었는지: CSV 디코드 라인수가 1(헤더만)이면 비어있다고 간주
+            # 빈 결과면 버린다 (헤더만 있는 경우)
             lines=$("$CODEQL" bqrs decode --format=csv "$tmp" | wc -l | tr -d ' ')
             if [ "${lines:-0}" -le 1 ]; then
               echo "  -> empty result, dropping"
