@@ -49,19 +49,6 @@ jobs:
           test -d "$DB_DIR" || { echo "::error::DB not found at $DB_DIR"; exit 1; }
           test -f "$DB_DIR/codeql-database.yml" || { echo "::error::Invalid CodeQL DB (missing codeql-database.yml)"; exit 1; }
 
-      - name: Skip if DB unchanged
-        id: dbhash
-        run: |
-          cur=$(sha256sum "$DB_DIR/codeql-database.yml" | awk '{print $1}')
-          echo "current_hash=$cur" >> $GITHUB_OUTPUT
-          if [ -f "$HASH_MARKER" ] && [ "$cur" = "$(cat "$HASH_MARKER")" ]; then
-            echo "No DB change detected. Skipping."
-            echo "skip=true" >> $GITHUB_OUTPUT
-          else
-            echo "$cur" > "$HASH_MARKER"
-            echo "skip=false" >> $GITHUB_OUTPUT
-          fi
-
       # 레포의 ql/ → ~/app/ql 로 클린 미러링
       - name: Sync ql/ from repo to /home/runner/app/ql (clean)
         if: ${{ steps.dbhash.outputs.skip != 'true' }}
