@@ -19,6 +19,7 @@ jobs:
       V8SRC: "/home/runner/app"              # <-- 변경
       REMAP: "/app/v8=/home/runner/app"      # <-- 변경
       V8BUILD: "/home/runner/app"            # <-- 변경
+      CODEQL: "/home/runner/codeql/codeql"
       CODEQL_ALLOW_INSTALLATION_ANYWHERE: "true"
 
     steps:
@@ -31,6 +32,7 @@ jobs:
           echo "HOOK_TOOL_DIR=$HOOK_TOOL_DIR"
           echo "V8SRC=$V8SRC"
           echo "V8BUILD=$V8BUILD"
+          echo "CODEQL=$CODEQL"
 
       - name: Sanity check directories
         shell: bash
@@ -50,7 +52,7 @@ jobs:
           for b in "$BQRS_DIR"/**/*.bqrs; do
             rel="${b#"$BQRS_DIR"/}"
             echo "[hook] $rel"
-            python3 "$INSERT_HOOK" "$b" --root "$V8SRC" --remap "$REMAP"
+            python3 "$INSERT_HOOK" "$b" --codeql "$CODEQL" --root "$V8SRC" --remap "$REMAP"
             cnt=$((cnt+1))
           done
           echo "Total processed: $cnt"
