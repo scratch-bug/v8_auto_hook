@@ -18,26 +18,26 @@ jobs:
 
     env:
       DB_DIR: "/home/runner/app/v8-src-db"
-      QL_DIR: "/home/runner/app/ql"
+      QL_DIR_SRC: "${{ github.workspace }}/ql"
+      QL_DIR_DST: "/home/runner/app/ql"
       OUT_BQRS: "/home/runner/app/bqrs"
       HASH_MARKER: "/home/runner/app/.v8_db_hash"
       CODEQL_RAM: "16384"
       CODEQL_THREADS: "4"
-      # CodeQL 절대경로(환경에 맞게 수정)
       CODEQL: "/home/runner/codeql/codeql"
 
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
       - name: Show context
         run: |
           echo "Triggered by: $GITHUB_EVENT_NAME"
           whoami
           id
           ls -la "$DB_DIR" || true
-
-      - name: Checkout (optional if ql is not in repo)
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       - name: Verify CodeQL binary
         run: |
@@ -62,40 +62,63 @@ jobs:
             echo "skip=false" >> $GITHUB_OUTPUT
           fi
 
-      - name: Install packs for ql/
+      # 레포의 ql/ → ~/app/ql 로 클린 미러링
+      - name: Sync ql/ from repo to /home/runner/app/ql (clean)
         if: ${{ steps.dbhash.outputs.skip != 'true' }}
         run: |
-          if [ -d "$QL_DIR" ]; then
-            cd "$QL_DIR"
-            if [ -f qlpack.yml ] || [ -f codeql-pack.yml ]; then
-              "$CODEQL" pack install
-            else
-              echo "No qlpack.yml in $QL_DIR — running raw queries."
-            fi
-          else
-            echo "::error::QL_DIR not found: $QL_DIR"
+          if [ ! -d "$QL_DIR_SRC" ]; then
+            echo "::error::No ql/ directory in repo at $QL_DIR_SRC"
             exit 1
           fi
+          mkdir -p "$QL_DIR_DST"
+          rsync -a --delete "$QL_DIR_SRC"/ "$QL_DIR_DST"/
+          echo "Synced:"
+          find "$QL_DIR_DST" -maxdepth 2 -type f -name '*.ql' | head -n 50 || true
 
-      - name: Run all .ql -> .bqrs
+      - name: Install packs for ql/
+        if: ${{ steps.dbhash.outputs.skip != 'true' }}
+        working-directory: ${{ env.QL_DIR_DST }}
+        run: |
+          if [ -f qlpack.yml ] || [ -f codeql-pack.yml ]; then
+            "$CODEQL" pack install
+          else
+            echo "No qlpack.yml in $PWD — running raw queries."
+          fi
+
+      - name: Run all .ql -> .bqrs (skip empty results)
         if: ${{ steps.dbhash.outputs.skip != 'true' }}
         env:
           DB_DIR: "/home/runner/app/v8-src-db"
           QL_DIR: "/home/runner/app/ql"
           OUT_BQRS: "/home/runner/app/bqrs"
+          CODEQL: "/home/runner/codeql/codeql"
         run: |
           mkdir -p "$OUT_BQRS"
           shopt -s globstar nullglob
-          count=0
+          count_total=0
+          count_kept=0
           for q in "$QL_DIR"/**/*.ql; do
             rel="${q#"$QL_DIR"/}"
             out="$OUT_BQRS/${rel%.ql}.bqrs"
+            tmp="${out}.tmp"
             mkdir -p "$(dirname "$out")"
-            echo "[CodeQL] $rel -> ${out#$OUT_BQRS/}"
-            "$CODEQL" query run --database "$DB_DIR" --output "$out" "$q"
-            count=$((count+1))
+
+            echo "[CodeQL] $rel -> ${out#$OUT_BQRS/} (temp: $(basename "$tmp"))"
+            "$CODEQL" query run --database "$DB_DIR" --output "$tmp" "$q" || { echo "::error::run failed: $rel"; rm -f "$tmp"; exit 1; }
+
+            # 결과가 비었는지: CSV 디코드 라인수가 1(헤더만)이면 비어있다고 간주
+            lines=$("$CODEQL" bqrs decode --format=csv "$tmp" | wc -l | tr -d ' ')
+            if [ "${lines:-0}" -le 1 ]; then
+              echo "  -> empty result, dropping"
+              rm -f "$tmp"
+            else
+              mv -f "$tmp" "$out"
+              echo "  -> non-empty, saved: ${out#$OUT_BQRS/}"
+              count_kept=$((count_kept+1))
+            fi
+            count_total=$((count_total+1))
           done
-          echo "Total queries executed: $count"
+          echo "Total queries: $count_total, kept(non-empty): $count_kept"
 
       - name: List BQRS tree
         if: ${{ steps.dbhash.outputs.skip != 'true' }}
