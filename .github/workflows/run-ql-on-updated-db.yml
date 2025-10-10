@@ -48,7 +48,7 @@ jobs:
         run: |
           test -d "$DB_DIR" || { echo "::error::DB not found at $DB_DIR"; exit 1; }
           test -f "$DB_DIR/codeql-database.yml" || { echo "::error::Invalid CodeQL DB (missing codeql-database.yml)"; exit 1; }
-          
+
       # 레포의 ql/ → ~/app/ql : 삭제 없이 갱신만 덮어쓰기
       - name: Sync ql/ to /home/runner/app/ql (no delete)
         if: ${{ steps.dbhash.outputs.skip != 'true' }}
@@ -64,18 +64,18 @@ jobs:
 
       # ~/app/ql에 codeql-pack.yml 없으면 생성 후 pack install
       - name: Ensure codeql-pack.yml and install packs
-        if: ${{ steps.dbhash.outputs.skip != 'true' }}
         working-directory: ${{ env.QL_DIR_DST }}
+        shell: bash
         run: |
           if [ ! -f codeql-pack.yml ] && [ ! -f qlpack.yml ]; then
-            cat > codeql-pack.yml <<'YAML'
-            name: scratch-bug.v8-custom-queries
-            version: 0.0.1
-            library: false
-            extractor: cpp
-            dependencies:
-              codeql/cpp-all: "*"
-            YAML
+            {
+              echo 'name: scratch-bug.v8-custom-queries'
+              echo 'version: 0.0.1'
+              echo 'library: false'
+              echo 'extractor: cpp'
+              echo 'dependencies:'
+              echo '  codeql/cpp-all: "*"'
+            } > codeql-pack.yml
             echo "Created default codeql-pack.yml"
           fi
           export CODEQL_ALLOW_INSTALLATION_ANYWHERE=true
