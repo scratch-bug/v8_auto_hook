@@ -62,7 +62,7 @@ jobs:
 
       - name: Build d8 with ninja (out/Debug)
         shell: bash
-        working-directory: /home/runner/app    # <-- 변경
+        working-directory: /home/runner/app/v8
         run: |
           J=$(( $(nproc) / 2 )); [ $J -ge 2 ] || J=2
           echo "Using -j$J -l$J"
