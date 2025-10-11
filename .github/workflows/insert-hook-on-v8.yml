@@ -23,24 +23,48 @@ jobs:
       CODEQL_ALLOW_INSTALLATION_ANYWHERE: "true"
 
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
       - name: Show context
         shell: bash
         run: |
           whoami
           python3 --version || true
+          echo "WORKSPACE=$GITHUB_WORKSPACE"
           echo "BQRS_DIR=$BQRS_DIR"
           echo "HOOK_TOOL_DIR=$HOOK_TOOL_DIR"
           echo "V8SRC=$V8SRC"
           echo "V8BUILD=$V8BUILD"
           echo "CODEQL=$CODEQL"
 
-      - name: Sanity check directories
+      - name: Sanity check base directories (pre-V8)
         shell: bash
         run: |
           test -d "$BQRS_DIR"       || { echo "::error::No BQRS_DIR at $BQRS_DIR"; exit 1; }
           test -d "$HOOK_TOOL_DIR"  || { echo "::error::No HOOK_TOOL_DIR at $HOOK_TOOL_DIR"; exit 1; }
           test -f "$INSERT_HOOK"    || { echo "::error::insert_hook.py not found at $INSERT_HOOK"; exit 1; }
-          test -d "$V8SRC/v8"       || { echo "::error::Expected $V8SRC/v8 to exist"; exit 1; }
+
+      - name: Ensure V8 tree at $V8SRC/v8 (create/copy if missing)
+        shell: bash
+        run: |
+          set -euo pipefail
+          src_repo_v8="$GITHUB_WORKSPACE/v8"
+          dst_v8="$V8SRC/v8"
+
+          if [ -d "$dst_v8" ]; then
+            echo "[ok] Found existing V8 at $dst_v8"
+          else
+            echo "[info] $dst_v8 not found. Creating and copying repository v8/ → $dst_v8"
+            test -d "$src_repo_v8" || { echo "::error::Repository does not contain v8/ at $src_repo_v8"; exit 1; }
+            mkdir -p "$dst_v8"
+            rsync -rltD --delete --omit-dir-times --no-owner --no-group --no-perms "$src_repo_v8"/ "$dst_v8"/
+          fi
+
+      - name: Sanity check V8 presence
+        shell: bash
+        run: |
+          test -d "$V8SRC/v8"          || { echo "::error::Expected $V8SRC/v8 to exist"; exit 1; }
           test -f "$V8SRC/v8/BUILD.gn" || { echo "::error::Expected $V8SRC/v8/BUILD.gn"; exit 1; }
 
       - name: Copy hooks into v8/tools
@@ -75,7 +99,19 @@ jobs:
             echo "::warning::No .bqrs files found under $BQRS_DIR"
           fi
 
-      - name: Build d8 with ninja (out.gn/x64.debug)
+      - name: Generate out/Debug if missing
+        shell: bash
+        working-directory: /home/user/app/v8
+        run: |
+          set -euo pipefail
+          if [ ! -d "out/Debug" ]; then
+            echo "[info] out/Debug not found. Running gn gen..."
+            gn gen out/Debug --args='v8_enable_src_hooks=true'
+          else
+            echo "[ok] out/Debug exists. Skipping gn gen."
+          fi
+
+      - name: Build d8 with ninja (out/Debug)
         shell: bash
         working-directory: /home/user/app/v8
         run: |
