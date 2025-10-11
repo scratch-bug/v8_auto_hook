@@ -13,111 +13,115 @@ jobs:
     timeout-minutes: 0
 
     env:
-      BQRS_DIR: "/home/user/app/bqrs"
-      HOOK_TOOL_DIR: "/home/user/app/hook_tool"
-      INSERT_HOOK: "/home/user/app/hook_tool/insert_hook.py"
-      V8SRC: "/home/user/app"
-      REMAP: "/app/v8=/home/user/app"
-      V8BUILD: "/home/user/app"
-      CODEQL: "/home/user/codeql-cli/codeql/codeql"
-      CODEQL_ALLOW_INSTALLATION_ANYWHERE: "true"
+      # Fixed dirs on the self-hosted runner
+      APPDIR: "/home/user/app"
+      V8DIR: "/home/user/app/v8"
+      OUT_DIR: "out.gn/x64.release"
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: Show context
+      # Optional on self-hosted if already present
+      - name: Install host deps (optional)
         shell: bash
         run: |
-          whoami
-          python3 --version || true
-          echo "WORKSPACE=$GITHUB_WORKSPACE"
-          echo "BQRS_DIR=$BQRS_DIR"
-          echo "HOOK_TOOL_DIR=$HOOK_TOOL_DIR"
-          echo "V8SRC=$V8SRC"
-          echo "V8BUILD=$V8BUILD"
-          echo "CODEQL=$CODEQL"
+          which rsync  || { sudo apt-get update && sudo apt-get install -y rsync; }
+          which ninja  || sudo apt-get install -y ninja-build || true
+          which unzip  || sudo apt-get install -y unzip || true
 
-      - name: Sanity check base directories (pre-V8)
+      - name: Install depot_tools (gn, ninja wrappers) to PATH
         shell: bash
+        env:
+          DEPOT_TOOLS: ${{ runner.temp }}/depot_tools
         run: |
-          test -d "$BQRS_DIR"       || { echo "::error::No BQRS_DIR at $BQRS_DIR"; exit 1; }
-          test -d "$HOOK_TOOL_DIR"  || { echo "::error::No HOOK_TOOL_DIR at $HOOK_TOOL_DIR"; exit 1; }
-          test -f "$INSERT_HOOK"    || { echo "::error::insert_hook.py not found at $INSERT_HOOK"; exit 1; }
+          set -euo pipefail
+          if [ ! -d "$DEPOT_TOOLS" ]; then
+            git clone --depth 1 https://chromium.googlesource.com/chromium/tools/depot_tools.git "$DEPOT_TOOLS"
+          fi
+          echo "$DEPOT_TOOLS" >> "$GITHUB_PATH"
+          # Make depot_tools use pinned toolchains
+          echo "DEPOT_TOOLS_UPDATE=1" >> "$GITHUB_ENV"
+          echo "GCLIENT_PY3=1" >> "$GITHUB_ENV"
+          echo "NINJA_STATUS=[%f/%t %o/sec %es] " >> "$GITHUB_ENV"
+          echo "NINJA_SUMMARIZE_BUILD=1" >> "$GITHUB_ENV"
 
-      - name: Ensure V8 tree at $V8SRC/v8 (use existing, else copy WHOLE workspace)
+      - name: Bootstrap depot_tools Python (CIPD sanity)
         shell: bash
         run: |
           set -euo pipefail
-          dst_v8="$V8SRC/v8"
-          src_ws="$GITHUB_WORKSPACE"
+          update_depot_tools || true
+          gclient --version || true
+          vpython3 -V || true
 
-          if [ -d "$dst_v8" ]; then
-            echo "[ok] Found existing V8 at $dst_v8"
+      - name: Ensure V8 tree at $V8DIR
+        id: ensure_v8
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -d "$V8DIR" ]; then
+            echo "[ok] Found existing V8 at $V8DIR"
+            echo "NEW_V8=0" >> "$GITHUB_ENV"
           else
-            echo "[info] $dst_v8 not found. Copying entire workspace → $dst_v8"
-            mkdir -p "$dst_v8"
-            # 워크스페이스 전체를 복사하되 .git 등 불필요한 메타는 제외
-            rsync -rltD --delete \
+            echo "[info] $V8DIR not found. Mirroring entire repository → $V8DIR"
+            mkdir -p "$V8DIR"
+            rsync -a --delete \
               --omit-dir-times --no-owner --no-group --no-perms \
-              --exclude '.git/' --exclude '.github/' \
-              "$src_ws"/ "$dst_v8"/
+              --exclude '.git/' \
+              "$GITHUB_WORKSPACE"/ "$V8DIR"/
+            echo "NEW_V8=1" >> "$GITHUB_ENV"
           fi
+          echo "[diag] V8DIR contents (top 50):"
+          ls -la "$V8DIR" | head -n 50
 
-      - name: Sanity check V8 presence
+      # Only when we just created V8DIR from the repo:
+      - name: gclient config / sync / runhooks (unmanaged)
+        if: env.NEW_V8 == '1'
         shell: bash
-        run: |
-          test -d "$V8SRC/v8"          || { echo "::error::Expected $V8SRC/v8 to exist"; exit 1; }
-          test -f "$V8SRC/v8/BUILD.gn" || { echo "::error::Expected $V8SRC/v8/BUILD.gn"; exit 1; }
-
-      - name: Copy hooks into v8/tools
-        shell: bash
+        working-directory: ${{ env.APPDIR }}
         run: |
           set -euo pipefail
-          src="$HOOK_TOOL_DIR/hooks"
-          dst="$V8SRC/v8/tools/hooks"
-          test -d "$src" || { echo "::error::hooks dir not found at $src"; exit 1; }
-          mkdir -p "$dst"
-          rsync -rltD --omit-dir-times --no-owner --no-group --no-perms "$src"/ "$dst"/
+          # Configure a minimal client around $APPDIR/v8 WITHOUT converting it into a managed checkout
+          gclient config --unmanaged --name v8 https://chromium.googlesource.com/v8/v8
+          # This brings in third_party dependencies required by GN build (clang toolchain, etc.)
+          gclient sync -D --no-history --shallow
+          gclient runhooks
 
-      - name: Patch BUILD.gn via script
+      - name: Ensure Clang toolchain (CIPD)
         shell: bash
-        run: |
-          python3 "$HOOK_TOOL_DIR/patch_build_gn.py" "$V8SRC/v8"
-
-      - name: Run insert_hook.py for all BQRS
-        shell: bash
-        working-directory: /home/user/app
-        run: |
-          shopt -s globstar nullglob
-          cnt=0
-          for b in "$BQRS_DIR"/**/*.bqrs; do
-            rel="${b#"$BQRS_DIR"/}"
-            echo "[hook] $rel"
-            python3 "$INSERT_HOOK" "$b" --codeql "$CODEQL" --root "$V8SRC" --remap "$REMAP"
-            cnt=$((cnt+1))
-          done
-          echo "Total processed: $cnt"
-          if [ $cnt -eq 0 ]; then
-            echo "::warning::No .bqrs files found under $BQRS_DIR"
-          fi
-
-      - name: Generate out/Debug if missing
-        shell: bash
-        working-directory: /home/user/app/v8
+        working-directory: ${{ env.V8DIR }}
         run: |
           set -euo pipefail
-          if [ ! -d "out/Debug" ]; then
-            echo "[info] out/Debug not found. Running gn gen..."
-            gn gen out/Debug --args='v8_enable_src_hooks=true'
+          # Ensures third_party/llvm-build etc. are fetched
+          python3 tools/clang/scripts/update.py
+
+      - name: Generate ${{ env.OUT_DIR }} with v8gen.py (v8_enable_src_hooks = true)
+        shell: bash
+        working-directory: ${{ env.V8DIR }}
+        run: |
+          set -euo pipefail
+          if [ ! -d "${OUT_DIR}" ]; then
+            echo "[info] ${OUT_DIR} not found. Running v8gen.py..."
+            # v8gen.py internally invokes gn; depot_tools must be in PATH
+            python3 ./tools/dev/v8gen.py x64.release -- v8_enable_src_hooks=true
           else
-            echo "[ok] out/Debug exists. Skipping gn gen."
+            echo "[ok] ${OUT_DIR} exists. Enforcing v8_enable_src_hooks=true and regenerating if needed."
+            if ! grep -q 'v8_enable_src_hooks *= *true' "${OUT_DIR}/args.gn" 2>/dev/null; then
+              echo 'v8_enable_src_hooks = true' >> "${OUT_DIR}/args.gn"
+              # Re-run gn to apply updated args
+              gn gen "${OUT_DIR}" || true
+            fi
           fi
 
-      - name: Build d8 with ninja (out/Debug)
+      # If you also want to build d8 right here, keep this step; otherwise remove it.
+      - name: Build d8 with ninja
         shell: bash
-        working-directory: /home/user/app/v8
+        working-directory: ${{ env.V8DIR }}
         run: |
+          set -euo pipefail
+          command -v ninja >/dev/null 2>&1 || { echo "::error::ninja not found on PATH"; exit 1; }
           J=$(( $(nproc) / 2 )); [ $J -ge 2 ] || J=2
           echo "Using -j$J -l$J"
-          ninja -C out/Debug d8 -j"$J" -l"$J"
+          ninja -C "${OUT_DIR}" d8 -j"$J" -l"$J"
