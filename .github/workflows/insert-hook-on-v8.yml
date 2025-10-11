@@ -16,7 +16,7 @@ jobs:
       # Fixed dirs on the self-hosted runner
       APPDIR: "/home/user/app"
       V8DIR: "/home/user/app/v8"
-      OUT_DIR: "out.gn/x64.release"
+      OUT_DIR: "out.gn/v8.hooks"
       # hook insertion inputs
       BQRS_DIR: "/home/user/app/bqrs"
       HOOK_TOOL_DIR: "/home/user/app/hook_tool"
@@ -148,7 +148,7 @@ jobs:
           set -euo pipefail
           if [ ! -d "${OUT_DIR}" ]; then
             echo "[info] ${OUT_DIR} not found. Running v8gen.py..."
-            python3 ./tools/dev/v8gen.py x64.release -- v8_enable_src_hooks=true
+            python3 ./tools/dev/v8gen.py v8.hooks -- v8_enable_src_hooks=true
           else
             echo "[ok] ${OUT_DIR} exists. Enforcing v8_enable_src_hooks=true and regenerating if needed."
             if ! grep -q 'v8_enable_src_hooks *= *true' "${OUT_DIR}/args.gn" 2>/dev/null; then
