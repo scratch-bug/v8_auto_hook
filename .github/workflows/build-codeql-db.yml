@@ -51,10 +51,10 @@ jobs:
           gclient --version || true
           vpython3 -V || true
 
-      # ✅ 완전 제거 후 깨끗하게 미러링 + 경로 고정
-      - name: Mirror repository to /home/runner/app (clean)
+      # ✅ 완전 제거 후 깨끗하게 미러링 + 경로 고정 (/home/user)
+      - name: Mirror repository to /home/user/app (clean)
         run: |
-          APP="/home/runner/app"
+          APP="/home/user/app"
           mkdir -p "$APP/v8"
           rsync -a --delete "$GITHUB_WORKSPACE"/ "$APP/v8"/
           echo "APPDIR=$APP" >> $GITHUB_ENV
@@ -102,7 +102,7 @@ jobs:
       - name: Verify CodeQL
         run: codeql --version
 
-      # DB를 /home/runner/app/<DB_NAME> 에 생성
+      # DB를 /home/user/app/<DB_NAME> 에 생성
       - name: Build CodeQL DB (ninja d8)
         working-directory: ${{ env.V8DIR }}
         env:

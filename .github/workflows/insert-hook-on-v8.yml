@@ -13,13 +13,13 @@ jobs:
     timeout-minutes: 0
 
     env:
-      BQRS_DIR: "/home/runner/app/bqrs"
-      HOOK_TOOL_DIR: "/home/runner/app/hook_tool"
-      INSERT_HOOK: "/home/runner/app/hook_tool/insert_hook.py"
-      V8SRC: "/home/runner/app"              # <-- 변경
-      REMAP: "/app/v8=/home/runner/app"      # <-- 변경
-      V8BUILD: "/home/runner/app"            # <-- 변경
-      CODEQL: "/home/runner/codeql/codeql"
+      BQRS_DIR: "/home/user/app/bqrs"
+      HOOK_TOOL_DIR: "/home/user/app/hook_tool"
+      INSERT_HOOK: "/home/user/app/hook_tool/insert_hook.py"
+      V8SRC: "/home/user/app"              # --root /home/user/app
+      REMAP: "/app/v8=/home/user/app"      # --remap /app/v8=/home/user/app
+      V8BUILD: "/home/user/app"            # 빌드는 /home/user/app/v8에서
+      CODEQL: "/home/user/codeql/codeql"
       CODEQL_ALLOW_INSTALLATION_ANYWHERE: "true"
 
     steps:
@@ -45,7 +45,7 @@ jobs:
 
       - name: Run insert_hook.py for all BQRS
         shell: bash
-        working-directory: /home/runner/app
+        working-directory: /home/user/app
         run: |
           shopt -s globstar nullglob
           cnt=0
@@ -60,9 +60,9 @@ jobs:
             echo "::warning::No .bqrs files found under $BQRS_DIR"
           fi
 
-      - name: Build d8 with ninja (out/Debug)
+      - name: Build d8 with ninja (out.gn/x64.debug)
         shell: bash
-        working-directory: /home/runner/app/v8
+        working-directory: /home/user/app/v8
         run: |
           J=$(( $(nproc) / 2 )); [ $J -ge 2 ] || J=2
           echo "Using -j$J -l$J"

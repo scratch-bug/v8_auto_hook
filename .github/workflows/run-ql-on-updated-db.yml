@@ -16,13 +16,13 @@ jobs:
     timeout-minutes: 0
 
     env:
-      DB_DIR: "/home/runner/app/v8-src-db"
+      DB_DIR: "/home/user/app/v8-src-db"
       QL_DIR_SRC: "${{ github.workspace }}/ql"
-      QL_DIR_DST: "/home/runner/app/ql"
-      OUT_BQRS: "/home/runner/app/bqrs"
+      QL_DIR_DST: "/home/user/app/ql"
+      OUT_BQRS: "/home/user/app/bqrs"
       CODEQL_RAM: "16384"
       CODEQL_THREADS: "4"
-      CODEQL: "/home/runner/codeql/codeql"
+      CODEQL: "/home/user/codeql/codeql"
 
     steps:
       - name: Checkout
@@ -48,7 +48,7 @@ jobs:
           test -f "$DB_DIR/codeql-database.yml" || { echo "::error::Invalid CodeQL DB (missing codeql-database.yml)"; exit 1; }
 
       # 🔁 ~/app/ql을 싹 비우고 레포의 ql/로 클린 복사
-      - name: Clean and copy ql/ to /home/runner/app/ql
+      - name: Clean and copy ql/ to /home/user/app/ql
         shell: bash
         run: |
           if [ ! -d "$QL_DIR_SRC" ]; then
@@ -56,10 +56,8 @@ jobs:
             exit 1
           fi
           mkdir -p "$QL_DIR_DST"
-          # 안전하게 목적지만 비우기
+          # 목적지만 깨끗이 비우기
           find "$QL_DIR_DST" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
-          # 또는 rsync로 원본 기준 정리하고 싶으면 아래 한 줄만 사용:
-          # rsync -a --delete "$QL_DIR_SRC"/ "$QL_DIR_DST"/
           cp -a "$QL_DIR_SRC"/. "$QL_DIR_DST"/
           echo "Synced (clean):"
           find "$QL_DIR_DST" -maxdepth 2 -type f -name '*.ql' | head -n 50 || true
@@ -85,10 +83,10 @@ jobs:
 
       - name: Run all .ql -> .bqrs (skip empty results)
         env:
-          DB_DIR: "/home/runner/app/v8-src-db"
-          QL_DIR: "/home/runner/app/ql"
-          OUT_BQRS: "/home/runner/app/bqrs"
-          CODEQL: "/home/runner/codeql/codeql"
+          DB_DIR: "/home/user/app/v8-src-db"
+          QL_DIR: "/home/user/app/ql"
+          OUT_BQRS: "/home/user/app/bqrs"
+          CODEQL: "/home/user/codeql/codeql"
         shell: bash
         run: |
           export CODEQL_ALLOW_INSTALLATION_ANYWHERE=true

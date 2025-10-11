@@ -29,6 +29,9 @@ if (is_ios) {
 emit_builtins_as_inline_asm = is_win && is_clang
 
 declare_args() {
+  
+  v8_enable_src_hooks = false
+
   # Print to stdout on Android.
   v8_android_log_stdout = false
 
@@ -5999,6 +6002,10 @@ v8_source_set("v8_base_without_compiler") {
     "src/zone/zone.cc",
     "third_party/siphash/halfsiphash.cc",
   ]
+
+  if(v8_enable_src_hooks){
+    sources += [ "//tools/hooks/codeql_hook.c" ]
+  }
 
   if (v8_enable_snapshot_compression) {
     sources += [ "src/snapshot/snapshot-compression.cc" ]
