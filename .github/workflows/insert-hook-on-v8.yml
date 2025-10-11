@@ -21,11 +21,13 @@ jobs:
       V8BUILD: "/home/user/app"
       CODEQL: "/home/user/codeql-cli/codeql/codeql"
       CODEQL_ALLOW_INSTALLATION_ANYWHERE: "true"
-      # 선택: 레포에 v8/ 디렉터리가 없다면 이 URL에서 클론
-      # 예) 공식 미러 등: https://chromium.googlesource.com/v8/v8.git
+      # (선택) 레포에 v8/이 없으면 이 URL에서 shallow clone
+      # 예: https://chromium.googlesource.com/v8/v8.git
       V8_GIT_URL: ""
-      # 선택: 특정 브랜치/태그/커밋 지정. 미지정 시 기본 브랜치
+      # (선택) 브랜치/태그/커밋 지정
       V8_GIT_REF: ""
+      # (선택) 레포 내부의 v8 위치를 직접 지정 (예: ${{ github.workspace }}/third_party/v8)
+      REPO_V8_DIR: ""
 
     steps:
       - name: Checkout repository
@@ -44,6 +46,7 @@ jobs:
           echo "CODEQL=$CODEQL"
           echo "V8_GIT_URL=${V8_GIT_URL:-<unset>}"
           echo "V8_GIT_REF=${V8_GIT_REF:-<unset>}"
+          echo "REPO_V8_DIR=${REPO_V8_DIR:-<unset>}"
 
       - name: Sanity check base directories (pre-V8)
         shell: bash
@@ -57,15 +60,48 @@ jobs:
         run: |
           set -euo pipefail
           dst_v8="$V8SRC/v8"
-          repo_v8="$GITHUB_WORKSPACE/v8"
+          echo "[diag] GITHUB_WORKSPACE=$GITHUB_WORKSPACE"
+          echo "[diag] Listing workspace root:"
+          ls -la "$GITHUB_WORKSPACE" || true
 
+          # 1) 목적지에 이미 있으면 사용
           if [ -d "$dst_v8" ]; then
             echo "[ok] Found existing V8 at $dst_v8"
-          elif [ -d "$repo_v8" ]; then
-            echo "[info] Copying repository v8/ → $dst_v8"
+            exit 0
+          fi
+
+          # 2) 레포 안에서 v8 후보 경로 탐색 (REPO_V8_DIR 우선)
+          candidates=()
+          if [ -n "${REPO_V8_DIR:-}" ]; then
+            candidates+=("$REPO_V8_DIR")
+          fi
+          candidates+=(
+            "$GITHUB_WORKSPACE/v8"
+            "$GITHUB_WORKSPACE/src/v8"
+            "$GITHUB_WORKSPACE/third_party/v8"
+            "$GITHUB_WORKSPACE/deps/v8"
+            "$GITHUB_WORKSPACE/vendor/v8"
+            "$GITHUB_WORKSPACE/external/v8"
+            "$HOOK_TOOL_DIR/v8"
+          )
+
+          src_found=""
+          for c in "${candidates[@]}"; do
+            if [ -d "$c" ]; then
+              src_found="$c"
+              break
+            fi
+          done
+
+          if [ -n "$src_found" ]; then
+            echo "[info] Copying V8 from $src_found → $dst_v8"
             mkdir -p "$dst_v8"
-            rsync -rltD --delete --omit-dir-times --no-owner --no-group --no-perms "$repo_v8"/ "$dst_v8"/
-          elif [ -n "${V8_GIT_URL:-}" ]; then
+            rsync -rltD --delete --omit-dir-times --no-owner --no-group --no-perms "$src_found"/ "$dst_v8"/
+            exit 0
+          fi
+
+          # 3) 폴백: V8_GIT_URL이 설정돼 있으면 shallow clone
+          if [ -n "${V8_GIT_URL:-}" ]; then
             echo "[info] Cloning V8 from $V8_GIT_URL → $dst_v8"
             mkdir -p "$(dirname "$dst_v8")"
             git clone --depth 1 "$V8_GIT_URL" "$dst_v8"
@@ -74,10 +110,18 @@ jobs:
               git -C "$dst_v8" fetch --depth 1 origin "$V8_GIT_REF" || true
               git -C "$dst_v8" checkout -q "$V8_GIT_REF"
             fi
-          else
-            echo "::error::No V8 tree found. Provide one of: (1) pre-existing $dst_v8, (2) repo v8/ directory, or (3) set V8_GIT_URL to clone."
-            exit 1
+            exit 0
           fi
+
+          echo "::error::No V8 tree found.
+          Tried candidates:
+          - ${candidates[*]}
+          And V8_GIT_URL is empty.
+          Either:
+            (1) ensure one of those paths exists in the repo,
+            (2) set REPO_V8_DIR to the actual v8 path in this repo, or
+            (3) set V8_GIT_URL to clone."
+          exit 1
 
       - name: Sanity check V8 presence
         shell: bash
