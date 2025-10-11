@@ -1,4 +1,4 @@
-name: insert-hooks-and-build-d8
+name: insert-hooks-on-build-d8
 
 on:
   workflow_run:

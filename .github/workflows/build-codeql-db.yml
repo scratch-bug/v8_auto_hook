@@ -1,6 +1,9 @@
 name: build-codeql-db
 
 on:
+  workflow_run:
+    workflows: ["sync-upstream"]
+    types: [completed]
   workflow_dispatch:
 
 env:

@@ -2,7 +2,7 @@ name: push-v8-snapshot
 
 on:
   workflow_run:
-    workflows: ["insert-hooks-and-build-d8"]
+    workflows: ["insert-hooks-on-build-d8"]
     types: [completed]
   workflow_dispatch:
     inputs:
