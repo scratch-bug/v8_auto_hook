@@ -21,6 +21,11 @@ jobs:
       V8BUILD: "/home/user/app"
       CODEQL: "/home/user/codeql-cli/codeql/codeql"
       CODEQL_ALLOW_INSTALLATION_ANYWHERE: "true"
+      # 선택: 레포에 v8/ 디렉터리가 없다면 이 URL에서 클론
+      # 예) 공식 미러 등: https://chromium.googlesource.com/v8/v8.git
+      V8_GIT_URL: ""
+      # 선택: 특정 브랜치/태그/커밋 지정. 미지정 시 기본 브랜치
+      V8_GIT_REF: ""
 
     steps:
       - name: Checkout repository
@@ -37,6 +42,8 @@ jobs:
           echo "V8SRC=$V8SRC"
           echo "V8BUILD=$V8BUILD"
           echo "CODEQL=$CODEQL"
+          echo "V8_GIT_URL=${V8_GIT_URL:-<unset>}"
+          echo "V8_GIT_REF=${V8_GIT_REF:-<unset>}"
 
       - name: Sanity check base directories (pre-V8)
         shell: bash
@@ -45,20 +52,31 @@ jobs:
           test -d "$HOOK_TOOL_DIR"  || { echo "::error::No HOOK_TOOL_DIR at $HOOK_TOOL_DIR"; exit 1; }
           test -f "$INSERT_HOOK"    || { echo "::error::insert_hook.py not found at $INSERT_HOOK"; exit 1; }
 
-      - name: Ensure V8 tree at $V8SRC/v8 (create/copy if missing)
+      - name: Ensure V8 tree at $V8SRC/v8 (use existing / copy / clone)
         shell: bash
         run: |
           set -euo pipefail
-          src_repo_v8="$GITHUB_WORKSPACE/v8"
           dst_v8="$V8SRC/v8"
+          repo_v8="$GITHUB_WORKSPACE/v8"
 
           if [ -d "$dst_v8" ]; then
             echo "[ok] Found existing V8 at $dst_v8"
-          else
-            echo "[info] $dst_v8 not found. Creating and copying repository v8/ → $dst_v8"
-            test -d "$src_repo_v8" || { echo "::error::Repository does not contain v8/ at $src_repo_v8"; exit 1; }
+          elif [ -d "$repo_v8" ]; then
+            echo "[info] Copying repository v8/ → $dst_v8"
             mkdir -p "$dst_v8"
-            rsync -rltD --delete --omit-dir-times --no-owner --no-group --no-perms "$src_repo_v8"/ "$dst_v8"/
+            rsync -rltD --delete --omit-dir-times --no-owner --no-group --no-perms "$repo_v8"/ "$dst_v8"/
+          elif [ -n "${V8_GIT_URL:-}" ]; then
+            echo "[info] Cloning V8 from $V8_GIT_URL → $dst_v8"
+            mkdir -p "$(dirname "$dst_v8")"
+            git clone --depth 1 "$V8_GIT_URL" "$dst_v8"
+            if [ -n "${V8_GIT_REF:-}" ]; then
+              echo "[info] Checking out $V8_GIT_REF"
+              git -C "$dst_v8" fetch --depth 1 origin "$V8_GIT_REF" || true
+              git -C "$dst_v8" checkout -q "$V8_GIT_REF"
+            fi
+          else
+            echo "::error::No V8 tree found. Provide one of: (1) pre-existing $dst_v8, (2) repo v8/ directory, or (3) set V8_GIT_URL to clone."
+            exit 1
           fi
 
       - name: Sanity check V8 presence
