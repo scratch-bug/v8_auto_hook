@@ -22,7 +22,7 @@ jobs:
       OUT_BQRS: "/home/user/app/bqrs"
       CODEQL_RAM: "16384"
       CODEQL_THREADS: "4"
-      CODEQL: "/home/user/codeql/codeql"
+      CODEQL: "/home/user/codeql-cli/codeql/codeql"
 
     steps:
       - name: Checkout

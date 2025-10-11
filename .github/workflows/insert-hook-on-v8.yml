@@ -16,10 +16,10 @@ jobs:
       BQRS_DIR: "/home/user/app/bqrs"
       HOOK_TOOL_DIR: "/home/user/app/hook_tool"
       INSERT_HOOK: "/home/user/app/hook_tool/insert_hook.py"
-      V8SRC: "/home/user/app"              # --root /home/user/app
-      REMAP: "/app/v8=/home/user/app"      # --remap /app/v8=/home/user/app
-      V8BUILD: "/home/user/app"            # 빌드는 /home/user/app/v8에서
-      CODEQL: "/home/user/codeql/codeql"
+      V8SRC: "/home/user/app"
+      REMAP: "/app/v8=/home/user/app"
+      V8BUILD: "/home/user/app"
+      CODEQL: "/home/user/codeql-cli/codeql/codeql"
       CODEQL_ALLOW_INSTALLATION_ANYWHERE: "true"
 
     steps:
@@ -40,8 +40,23 @@ jobs:
           test -d "$BQRS_DIR"       || { echo "::error::No BQRS_DIR at $BQRS_DIR"; exit 1; }
           test -d "$HOOK_TOOL_DIR"  || { echo "::error::No HOOK_TOOL_DIR at $HOOK_TOOL_DIR"; exit 1; }
           test -f "$INSERT_HOOK"    || { echo "::error::insert_hook.py not found at $INSERT_HOOK"; exit 1; }
-          test -d "$V8SRC"          || { echo "::error::V8SRC not found at $V8SRC"; exit 1; }
-          test -d "$V8BUILD"        || { echo "::error::V8BUILD not found at $V8BUILD"; exit 1; }
+          test -d "$V8SRC/v8"       || { echo "::error::Expected $V8SRC/v8 to exist"; exit 1; }
+          test -f "$V8SRC/v8/BUILD.gn" || { echo "::error::Expected $V8SRC/v8/BUILD.gn"; exit 1; }
+
+      - name: Copy hooks into v8/tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          src="$HOOK_TOOL_DIR/hooks"
+          dst="$V8SRC/v8/tools/hooks"
+          test -d "$src" || { echo "::error::hooks dir not found at $src"; exit 1; }
+          mkdir -p "$dst"
+          rsync -rltD --omit-dir-times --no-owner --no-group --no-perms "$src"/ "$dst"/
+
+      - name: Patch BUILD.gn via script
+        shell: bash
+        run: |
+          python3 "$HOOK_TOOL_DIR/patch_build_gn.py" "$V8SRC/v8"
 
       - name: Run insert_hook.py for all BQRS
         shell: bash
