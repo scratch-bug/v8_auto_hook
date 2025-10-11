@@ -1,8 +1,8 @@
 name: Sync Fork with Upstream
 
 on:
-  # schedule:
-  #   - cron: '0 */6 * * *'   # 매 6시간마다 정각 (UTC 기준)
+  schedule:
+    - cron: '0 0 * * *'   # 매일 00:00 UTC
   workflow_dispatch:
 
 jobs:

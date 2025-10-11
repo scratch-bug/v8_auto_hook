@@ -1,6 +1,9 @@
 name: insert-hooks-and-build-d8
 
 on:
+  workflow_run:
+    workflows: ["run-ql-on-updated-db"]
+    types: [completed]
   workflow_dispatch:
 
 concurrency:
