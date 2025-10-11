@@ -17,6 +17,12 @@ jobs:
       APPDIR: "/home/user/app"
       V8DIR: "/home/user/app/v8"
       OUT_DIR: "out.gn/x64.release"
+      # hook insertion inputs
+      BQRS_DIR: "/home/user/app/bqrs"
+      HOOK_TOOL_DIR: "/home/user/app/hook_tool"
+      INSERT_HOOK: "/home/user/app/hook_tool/insert_hook.py"
+      REMAP: "/app/v8=/home/user/app"
+      CODEQL: "/home/user/codeql-cli/codeql/codeql"  # PATH에 있으면 생략 가능
 
     steps:
       - name: Checkout repository
@@ -42,7 +48,6 @@ jobs:
             git clone --depth 1 https://chromium.googlesource.com/chromium/tools/depot_tools.git "$DEPOT_TOOLS"
           fi
           echo "$DEPOT_TOOLS" >> "$GITHUB_PATH"
-          # Make depot_tools use pinned toolchains
           echo "DEPOT_TOOLS_UPDATE=1" >> "$GITHUB_ENV"
           echo "GCLIENT_PY3=1" >> "$GITHUB_ENV"
           echo "NINJA_STATUS=[%f/%t %o/sec %es] " >> "$GITHUB_ENV"
@@ -83,9 +88,7 @@ jobs:
         working-directory: ${{ env.APPDIR }}
         run: |
           set -euo pipefail
-          # Configure a minimal client around $APPDIR/v8 WITHOUT converting it into a managed checkout
           gclient config --unmanaged --name v8 https://chromium.googlesource.com/v8/v8
-          # This brings in third_party dependencies required by GN build (clang toolchain, etc.)
           gclient sync -D --no-history --shallow
           gclient runhooks
 
@@ -94,9 +97,50 @@ jobs:
         working-directory: ${{ env.V8DIR }}
         run: |
           set -euo pipefail
-          # Ensures third_party/llvm-build etc. are fetched
           python3 tools/clang/scripts/update.py
 
+      # ----- hooks 배치 & BUILD.gn 패치 -----
+      - name: Copy hooks into v8/tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          src="$HOOK_TOOL_DIR/hooks"
+          dst="$V8DIR/tools/hooks"
+          test -d "$src" || { echo "::error::hooks dir not found at $src"; exit 1; }
+          mkdir -p "$dst"
+          rsync -rltD --omit-dir-times --no-owner --no-group --no-perms "$src"/ "$dst"/
+
+      - name: Patch BUILD.gn via script
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 "$HOOK_TOOL_DIR/patch_build_gn.py" "$V8DIR"
+
+      # ----- insert_hook.py 실행 (BQRS 전수 삽입) -----
+      - name: Run insert_hook.py for all BQRS
+        shell: bash
+        working-directory: ${{ env.APPDIR }}
+        run: |
+          set -euo pipefail
+          shopt -s globstar nullglob
+          cnt=0
+          for b in "$BQRS_DIR"/**/*.bqrs; do
+            rel="${b#"$BQRS_DIR"/}"
+            echo "[hook] $rel"
+            if [ -x "$CODEQL" ]; then
+              python3 "$INSERT_HOOK" "$b" --codeql "$CODEQL" --root "$APPDIR" --remap "$REMAP"
+            else
+              # PATH에 codeql가 있다면 --codeql 생략 가능
+              python3 "$INSERT_HOOK" "$b" --root "$APPDIR" --remap "$REMAP"
+            fi
+            cnt=$((cnt+1))
+          done
+          echo "Total processed: $cnt"
+          if [ $cnt -eq 0 ]; then
+            echo "::warning::No .bqrs files found under $BQRS_DIR"
+          fi
+
+      # ----- gn gen 대신 v8gen.py 사용 -----
       - name: Generate ${{ env.OUT_DIR }} with v8gen.py (v8_enable_src_hooks = true)
         shell: bash
         working-directory: ${{ env.V8DIR }}
@@ -104,18 +148,15 @@ jobs:
           set -euo pipefail
           if [ ! -d "${OUT_DIR}" ]; then
             echo "[info] ${OUT_DIR} not found. Running v8gen.py..."
-            # v8gen.py internally invokes gn; depot_tools must be in PATH
             python3 ./tools/dev/v8gen.py x64.release -- v8_enable_src_hooks=true
           else
             echo "[ok] ${OUT_DIR} exists. Enforcing v8_enable_src_hooks=true and regenerating if needed."
             if ! grep -q 'v8_enable_src_hooks *= *true' "${OUT_DIR}/args.gn" 2>/dev/null; then
               echo 'v8_enable_src_hooks = true' >> "${OUT_DIR}/args.gn"
-              # Re-run gn to apply updated args
               gn gen "${OUT_DIR}" || true
             fi
           fi
 
-      # If you also want to build d8 right here, keep this step; otherwise remove it.
       - name: Build d8 with ninja
         shell: bash
         working-directory: ${{ env.V8DIR }}
