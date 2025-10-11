@@ -86,7 +86,7 @@ jobs:
           DB_DIR: "/home/user/app/v8-src-db"
           QL_DIR: "/home/user/app/ql"
           OUT_BQRS: "/home/user/app/bqrs"
-          CODEQL: "/home/user/codeql/codeql"
+          CODEQL: "/home/user/codeql-cli/codeql/codeql"
         shell: bash
         run: |
           export CODEQL_ALLOW_INSTALLATION_ANYWHERE=true
