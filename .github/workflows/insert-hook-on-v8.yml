@@ -117,7 +117,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python3 "$HOOK_TOOL_DIR/patch_build_gn.py" "$V8DIR"
+          python3 "$HOOK_TOOL_DIR/patch_init.py" "$V8DIR"
 
       # ----- insert_hook.py 실행 (BQRS 전수 삽입) -----
       - name: Run insert_hook.py for all BQRS
