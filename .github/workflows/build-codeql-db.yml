@@ -105,6 +105,25 @@ jobs:
       - name: Verify CodeQL
         run: codeql --version
 
+      # --- 새로 추가된 스텝: 기존 DB/압축 파일이 있으면 제거 ---
+      - name: Remove existing CodeQL DB (if any)
+        working-directory: ${{ env.APPDIR }}
+        run: |
+          echo "Checking for existing DB at: ${DBDIR}"
+          if [ -d "${DBDIR}" ]; then
+            echo "Found existing DB directory. Removing: ${DBDIR}"
+            rm -rf "${DBDIR}"
+          else
+            echo "No existing DB directory found."
+          fi
+          # 기존 패키지 파일도 제거 (옵션)
+          if [ -f "${DBDIR}.tar.zst" ]; then
+            echo "Found existing DB archive. Removing: ${DBDIR}.tar.zst"
+            rm -f "${DBDIR}.tar.zst"
+          else
+            echo "No existing DB archive found."
+          fi
+
       # DB를 /home/user/app/<DB_NAME> 에 생성
       - name: Build CodeQL DB (ninja d8)
         working-directory: ${{ env.V8DIR }}
