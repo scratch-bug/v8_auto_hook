@@ -1464,6 +1464,7 @@ struct ControlBase : public PcForErrors<ValidationTag::validate> {
     const Value args[], const ContIndexImmediate& new_imm, Value* result)      \
   F(Resume, const ContIndexImmediate& imm, base::Vector<HandlerCase> handlers, \
     const Value& cont_ref, const Value args[], const Value returns[])          \
+  F(ResumeHandler, const Value* cont_ref, const BranchDepthImmediate& br_imm)  \
   F(ResumeThrow, const ContIndexImmediate& cont_imm,                           \
     const TagIndexImmediate& exc_imm, base::Vector<HandlerCase> handlers,      \
     const Value args[], const Value returns[])                                 \
@@ -4721,6 +4722,21 @@ class WasmFullDecoder : public WasmDecoder<ValidationTag, decoding_mode> {
 
     CALL_INTERFACE_IF_OK_AND_REACHABLE(Resume, imm, handlers, cont_ref,
                                        args.data(), returns);
+    if (V8_LIKELY(current_code_reachable_and_ok_)) {
+      MarkMightThrow();
+      for (const HandlerCase& handler : handlers) {
+        if (handler.kind == kOnSuspend) {
+          // TODO(thibaudm): Push tag params here.
+          Value* suspend_cont =
+              Push(ValueType::Ref(imm.index, false, RefTypeKind::kCont));
+          CALL_INTERFACE_IF_OK_AND_REACHABLE(ResumeHandler, suspend_cont,
+                                             handler.maybe_depth.br);
+          Pop();
+          Control* target = control_at(handler.maybe_depth.br.depth);
+          target->br_merge()->reached = true;
+        }
+      }
+    }
     return 1 + imm.length + table_length;
   }
 
@@ -4760,6 +4776,15 @@ class WasmFullDecoder : public WasmDecoder<ValidationTag, decoding_mode> {
 
     CALL_INTERFACE_IF_OK_AND_REACHABLE(ResumeThrow, cont_imm, exc_imm, handlers,
                                        args.data(), returns);
+    if (V8_LIKELY(current_code_reachable_and_ok_)) {
+      MarkMightThrow();
+      for (const HandlerCase& handler : handlers) {
+        if (handler.kind == kOnSuspend) {
+          Control* target = control_at(handler.maybe_depth.br.depth);
+          target->br_merge()->reached = true;
+        }
+      }
+    }
     return 1 + exc_imm.length + cont_imm.length + table_length;
   }
 

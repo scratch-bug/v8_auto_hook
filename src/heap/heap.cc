@@ -2199,39 +2199,9 @@ bool Heap::CollectionRequested() {
 void Heap::CollectGarbageWithRetry(AllocationSpace space, GCFlags gc_flags,
                                    GarbageCollectionReason gc_reason,
                                    const GCCallbackFlags gc_callback_flags) {
-  const auto perform_heap_limit_check = v8_flags.late_heap_limit_check
-                                            ? PerformHeapLimitCheck::kNo
-                                            : PerformHeapLimitCheck::kYes;
-
-  if (space == NEW_SPACE) {
-    DCHECK_EQ(GCFlags(), gc_flags);
-
-    for (int i = 0; i < 2; i++) {
-      CollectGarbage(NEW_SPACE, gc_reason, gc_callback_flags,
-                     perform_heap_limit_check);
-
-      if (!ReachedHeapLimit()) {
-        return;
-      }
-    }
-  }
-
-  for (int i = 0; i < 2; i++) {
-    if (v8_flags.ineffective_gcs_forces_last_resort &&
-        HasConsecutiveIneffectiveMarkCompact()) {
-      break;
-    }
-    current_gc_flags_ = gc_flags;
-    CollectGarbage(OLD_SPACE, gc_reason, gc_callback_flags,
-                   perform_heap_limit_check);
-    DCHECK_EQ(GCFlags(), current_gc_flags_);
-
-    if (!ReachedHeapLimit()) {
-      return;
-    }
-  }
-
-  CollectAllAvailableGarbage(GarbageCollectionReason::kLastResort);
+  std::ignore = allocator()->RetryCustomAllocate(
+      [&]() { return !ReachedHeapLimit(); },
+      space == NEW_SPACE ? AllocationType::kYoung : AllocationType::kOld);
 }
 
 void Heap::CollectGarbageForBackground(LocalHeap* local_heap) {
@@ -3100,6 +3070,26 @@ void Heap::ProcessWeakListRoots(WeakObjectRetainer* retainer) {
       retainer->RetainAs(dirty_js_finalization_registries_list_tail()));
 }
 
+void Heap::AddToWeakNativeContextList(Tagged<Context> context) {
+  DCHECK(IsNativeContext(context));
+  DCHECK(LocalHeap::Current()->is_main_thread());
+
+#ifdef DEBUG
+  {
+    DCHECK(IsUndefined(context->next_context_link(), isolate()));
+    // Check that context is not in the list yet.
+    for (Tagged<Object> current = native_contexts_list();
+         !IsUndefined(current, isolate());
+         current = Cast<Context>(current)->next_context_link()) {
+      DCHECK(current != context);
+    }
+  }
+#endif
+  context->SetNoCell(Context::NEXT_CONTEXT_LINK, native_contexts_list(),
+                     UPDATE_WRITE_BARRIER);
+  set_native_contexts_list(context);
+}
+
 void Heap::ForeachAllocationSite(
     Tagged<Object> list,
     const std::function<void(Tagged<AllocationSite>)>& visitor) {
@@ -3252,22 +3242,12 @@ void* Heap::AllocateExternalBackingStore(
     }
   }
   void* result = allocate(byte_length);
-  if (result) return result;
-  if (!always_allocate()) {
-    for (int i = 0; i < 2; i++) {
-      if (v8_flags.ineffective_gcs_forces_last_resort &&
-          HasConsecutiveIneffectiveMarkCompact()) {
-        break;
-      }
-      CollectGarbage(OLD_SPACE,
-                     GarbageCollectionReason::kExternalMemoryPressure);
-      result = allocate(byte_length);
-      if (result) return result;
-    }
-    CollectAllAvailableGarbage(
-        GarbageCollectionReason::kExternalMemoryPressure);
+  if (result || always_allocate()) {
+    return result;
   }
-  return allocate(byte_length);
+  std::ignore = allocator()->RetryCustomAllocate(
+      [&]() { return result = allocate(byte_length); }, AllocationType::kOld);
+  return result;
 }
 
 // When old generation allocation limit is not configured (before the first full
