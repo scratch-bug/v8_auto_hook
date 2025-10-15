@@ -1,9 +1,9 @@
 name: build-codeql-db
 
 on:
-  workflow_run:
-    workflows: ["sync-upstream"]
-    types: [completed]
+  # workflow_run:
+  #   workflows: ["sync-upstream"]
+  #   types: [completed]
   workflow_dispatch:
 
 env:
@@ -105,7 +105,6 @@ jobs:
       - name: Verify CodeQL
         run: codeql --version
 
-      # --- 새로 추가된 스텝: 기존 DB/압축 파일이 있으면 제거 ---
       - name: Remove existing CodeQL DB (if any)
         working-directory: ${{ env.APPDIR }}
         run: |
