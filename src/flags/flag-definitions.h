@@ -999,7 +999,7 @@ DEFINE_BOOL(
     "reducing GCs.")
 DEFINE_BOOL(high_end_android, false,
             "Enables high-end mode unconditionally for Android.")
-DEFINE_UINT(high_end_android_physical_memory_threshold, UINT_MAX,
+DEFINE_UINT(high_end_android_physical_memory_threshold, 8,
             "Enables high-end mode for devices with more than X GB of physical "
             "memory (if X greater than 0).")
 
@@ -2408,6 +2408,13 @@ DEFINE_GENERIC_IMPLICATION(
     trace_gc_object_stats,
     TracingFlags::gc_stats.store(
         v8::tracing::TracingCategoryObserver::ENABLED_BY_NATIVE))
+
+#ifdef V8_COMPRESS_POINTERS
+DEFINE_BOOL(trace_gc_object_stats_all_objects, false,
+            "trace all objects on each gc (warning: large output)")
+DEFINE_IMPLICATION(trace_gc_object_stats_all_objects, trace_gc_object_stats)
+#endif  // V8_COMPRESS_POINTERS
+
 DEFINE_NEG_IMPLICATION(trace_gc_object_stats, incremental_marking)
 DEFINE_NEG_NEG_IMPLICATION(incremental_marking, concurrent_marking)
 DEFINE_NEG_NEG_IMPLICATION(parallel_marking, concurrent_marking)
@@ -2680,6 +2687,12 @@ DEFINE_BOOL(riscv_b_extension, false,
 DEFINE_BOOL(
     use_aliases, true,
     "use aliases for instruction mnemonics when printing code (RISCV only)")
+
+#ifdef USE_SIMULATOR
+DEFINE_BOOL(sim_abort_on_shadowstack_mismatch, true,
+            "Stop execution when shadowstack match fails in the "
+            "riscv simulator.")
+#endif
 #endif
 
 // Controlling source positions for Torque/CSA code.
@@ -3118,8 +3131,9 @@ DEFINE_BOOL(trace_regexp_parser, false, "trace regexp parsing")
 DEFINE_BOOL(trace_regexp_tier_up, false, "trace regexp tiering up execution")
 DEFINE_BOOL(trace_regexp_graph, false, "trace the regexp graph")
 
-DEFINE_BOOL(enable_experimental_regexp_engine, false,
-            "recognize regexps with 'l' flag, run them on experimental engine")
+DEFINE_EXPERIMENTAL_FEATURE(
+    enable_experimental_regexp_engine,
+    "recognize regexps with 'l' flag, run them on experimental engine")
 DEFINE_BOOL(default_to_experimental_regexp_engine, false,
             "run regexps with the experimental engine where possible")
 DEFINE_IMPLICATION(default_to_experimental_regexp_engine,
@@ -3134,9 +3148,10 @@ DEFINE_UINT64(experimental_regexp_engine_capture_group_opt_max_memory_usage,
 DEFINE_BOOL(trace_experimental_regexp_engine, false,
             "trace execution of experimental regexp engine")
 
-DEFINE_BOOL(enable_experimental_regexp_engine_on_excessive_backtracks, false,
-            "fall back to a breadth-first regexp engine on excessive "
-            "backtracking")
+DEFINE_EXPERIMENTAL_FEATURE(
+    enable_experimental_regexp_engine_on_excessive_backtracks,
+    "fall back to a breadth-first regexp engine on excessive "
+    "backtracking")
 DEFINE_UINT(regexp_backtracks_before_fallback, 50000,
             "number of backtracks during regexp execution before fall back "
             "to experimental engine if "
