@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       branch_date:
-        description: '브랜치 이름(YYYY-MM-DD). 비우면 UTC 오늘 날짜 사용'
+        description: '브랜치 이름 (YYYY-MM-DD). 비우면 UTC 오늘 날짜 사용'
         required: false
       include_build:
         description: 'out.gn 등 빌드 산출물 포함 여부 (true/false)'
@@ -20,16 +20,15 @@ concurrency:
 
 jobs:
   push-v8:
-    # insert-hooks-and-build-d8 가 성공했을 때만 자동 실행
     if: |
-      github.event_name == 'workflow_run'
-      && github.event.workflow_run.conclusion == 'success'
+      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success')
       || github.event_name == 'workflow_dispatch'
     runs-on: self-hosted
     timeout-minutes: 30
     env:
       SRC_DIR: "/home/user/app/v8"
       TARGET_REPO: "scratch-bug/v8_hook"
+      GITIGNORE_PATH: "/home/user/app/hook_tool/.gitignore"
 
     steps:
       - name: Check required secret (PAT_TOKEN)
@@ -52,18 +51,27 @@ jobs:
           echo "[diag] top of $SRC_DIR:"
           ls -la "$SRC_DIR" | head -n 50
 
+      - name: Validate gitignore file
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ ! -f "$GITIGNORE_PATH" ]; then
+            echo "::error::Gitignore file not found: $GITIGNORE_PATH"
+            exit 1
+          fi
+          echo "[diag] first lines of gitignore:"
+          head -n 20 "$GITIGNORE_PATH"
+
       - name: Compute branch name
         id: branch
         shell: bash
         run: |
           set -euo pipefail
-          # workflow_dispatch 입력이 있으면 사용, 없으면 UTC 오늘 날짜
           if [ -n "${{ github.event.inputs.branch_date }}" ]; then
             BRANCH="${{ github.event.inputs.branch_date }}"
           else
             BRANCH="$(date -u +%F)"
           fi
-
           if printf '%s' "$BRANCH" | grep -Eq '[[:space:]]|/|\\|\.\.|~|\^|:|\?|\*|\['; then
             echo "::error::Invalid branch name: $BRANCH"
             exit 1
@@ -75,7 +83,6 @@ jobs:
         id: stage
         shell: bash
         env:
-          # workflow_dispatch일 때만 값이 들어오고, 자동 실행 때는 기본 false
           INCLUDE_BUILD: ${{ github.event.inputs.include_build }}
         run: |
           set -euo pipefail
@@ -91,6 +98,7 @@ jobs:
 
           rsync -a --delete \
             --omit-dir-times --no-owner --no-group --no-perms \
+            --filter=":- $GITIGNORE_PATH" \
             "${EXCLUDES[@]}" \
             "$SRC_DIR"/ "$WORKDIR"/
 
@@ -105,20 +113,12 @@ jobs:
         run: |
           set -euo pipefail
           cd "$WORKDIR"
-
-          # self-hosted 환경 안전 경고 회피
           git config --global --add safe.directory "$WORKDIR"
-
           git init
-          git config user.name  "gh-actions"
+          git config user.name "gh-actions"
           git config user.email "actions@users.noreply.github.com"
           git add -A
           git commit -m "v8 snapshot $(date -u +'%Y-%m-%dT%H:%M:%SZ')"
-
-          # 원격 추가 (토큰 포함)
           git remote add origin "https://${{ secrets.PAT_TOKEN }}@github.com/${{ env.TARGET_REPO }}.git"
-
-          # 날짜 브랜치를 force-push 하고 싶지 않다면 -f 제거
           git push -u origin "HEAD:refs/heads/${BRANCH}"
-
           echo "[ok] pushed ${{ env.TARGET_REPO }}@${BRANCH}"
