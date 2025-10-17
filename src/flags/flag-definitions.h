@@ -1052,7 +1052,7 @@ DEFINE_INT(invocation_count_for_turbofan, 3000,
 DEFINE_INT(invocation_count_for_osr, 500, "invocation count required for OSR")
 DEFINE_INT(osr_to_tierup, 1,
            "number to decrease the invocation budget by when we follow OSR")
-DEFINE_INT(minimum_invocations_after_ic_update, 500,
+DEFINE_INT(minimum_invocations_after_ic_update, 150,
            "How long to minimally wait after IC update before tier up")
 DEFINE_INT(minimum_invocations_before_optimization, 2,
            "Minimum number of invocations we need before non-OSR optimization")
@@ -3389,6 +3389,10 @@ DEFINE_BOOL(
     handle_weak_ref_weakly_in_minor_gc, false,
     "Enables weak handling of WeakRef and FinalizationRegistry in minor GCs.")
 DEFINE_NEG_IMPLICATION(minor_ms, handle_weak_ref_weakly_in_minor_gc)
+DEFINE_NEG_IMPLICATION(scavenger_precise_object_pinning,
+                       handle_weak_ref_weakly_in_minor_gc)
+DEFINE_NEG_IMPLICATION(scavenger_conservative_object_pinning,
+                       handle_weak_ref_weakly_in_minor_gc)
 
 //
 // Dev shell flags

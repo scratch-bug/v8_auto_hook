@@ -953,7 +953,7 @@ std::unique_ptr<CompilationState> CompilationState::New(
     const std::shared_ptr<NativeModule>& native_module,
     WasmDetectedFeatures detected_features) {
   return std::unique_ptr<CompilationState>(reinterpret_cast<CompilationState*>(
-      new CompilationStateImpl(std::move(native_module), detected_features)));
+      new CompilationStateImpl(native_module, detected_features)));
 }
 
 WasmDetectedFeatures CompilationState::detected_features() const {
@@ -2321,7 +2321,7 @@ std::shared_ptr<NativeModule> GetOrCompileNewNativeModule(
   native_module->SetWireBytes(std::move(wire_bytes));
   native_module->compilation_state()->set_compilation_id(compilation_id);
 #if V8_ENABLE_TURBOFAN
-  if (v8_flags.experimental_wasm_wasmfx) {
+  if (v8_flags.experimental_wasm_wasmfx && module->num_declared_functions > 0) {
     // TODO(thibaudm): 1) Cache the wrappers per signature, 2) share them across
     // modules, 3) compile them lazily.
     auto wrapper_result = compiler::CompileWasmStackEntryWrapper();
@@ -2706,7 +2706,8 @@ void AsyncCompileJob::CreateNativeModule(
   native_module_->SetWireBytes(std::move(bytes_copy_));
   native_module_->compilation_state()->set_compilation_id(compilation_id_);
 #if V8_ENABLE_TURBOFAN
-  if (v8_flags.experimental_wasm_wasmfx) {
+  if (v8_flags.experimental_wasm_wasmfx &&
+      native_module_->module()->num_declared_functions > 0) {
     // TODO(thibaudm): 1) Cache the wrappers per signature, 2) share them across
     // modules, 3) compile them lazily.
     auto wrapper_result = compiler::CompileWasmStackEntryWrapper();
@@ -3519,7 +3520,7 @@ CompilationStateImpl::CompilationStateImpl(
     const std::shared_ptr<NativeModule>& native_module,
     WasmDetectedFeatures detected_features)
     : native_module_(native_module.get()),
-      native_module_weak_(std::move(native_module)),
+      native_module_weak_(native_module),
       compilation_unit_queues_(native_module->num_imported_functions(),
                                native_module->num_declared_functions()),
       detected_features_(detected_features) {}

@@ -108,11 +108,9 @@ class ScavengerObjectVisitorBase : public NewSpaceVisitor<ConcreteVisitor> {
   V8_INLINE void VisitCustomWeakPointers(Tagged<HeapObject> host,
                                          ObjectSlot start,
                                          ObjectSlot end) override {
-    DCHECK(GCAwareObjectTypeCheck<JSWeakRef>(host, scavenger_->heap_) ||
-           GCAwareObjectTypeCheck<WeakCell>(host, scavenger_->heap_) ||
-           GCAwareObjectTypeCheck<JSFinalizationRegistry>(host,
-                                                          scavenger_->heap_));
-    if (v8_flags.handle_weak_ref_weakly_in_minor_gc) {
+    DCHECK(IsJSWeakRef(host) || IsWeakCell(host) ||
+           IsJSFinalizationRegistry(host));
+    if (scavenger_->ShouldHandleWeakObjectsWeakly()) {
       return;
     }
     // Strongify the weak pointers.
@@ -962,14 +960,25 @@ void ScavengerCollector::CollectGarbage() {
 
   PinnedObjects pinned_objects;
 
+  const Heap::StackScanMode stack_scan_mode =
+      heap_->ConservativeStackScanningModeForMinorGC();
+  const bool is_using_conservative_stack_scanning =
+      stack_scan_mode != Heap::StackScanMode::kNone && heap_->IsGCWithStack();
+  const bool is_using_precise_pinning =
+      heap_->ShouldUsePrecisePinningForMinorGC();
+  const bool should_handle_weak_objects_weakly =
+      v8_flags.handle_weak_ref_weakly_in_minor_gc &&
+      !is_using_conservative_stack_scanning && !is_using_precise_pinning;
+
   const int num_scavenge_tasks = NumberOfScavengeTasks();
   std::vector<std::unique_ptr<Scavenger>> scavengers;
 
   const bool is_logging = isolate_->log_object_relocation();
   for (int i = 0; i < num_scavenge_tasks; ++i) {
-    scavengers.emplace_back(new Scavenger(
-        this, heap_, is_logging, &empty_chunks, &copied_list, &promoted_list,
-        &ephemeron_table_list, &js_weak_refs_list, &weak_cells_list));
+    scavengers.emplace_back(
+        new Scavenger(this, heap_, is_logging, &empty_chunks, &copied_list,
+                      &promoted_list, &ephemeron_table_list, &js_weak_refs_list,
+                      &weak_cells_list, should_handle_weak_objects_weakly));
   }
   Scavenger& main_thread_scavenger = *scavengers[kMainThreadId].get();
 
@@ -998,10 +1007,7 @@ void ScavengerCollector::CollectGarbage() {
           }
         });
 
-    const Heap::StackScanMode stack_scan_mode =
-        heap_->ConservativeStackScanningModeForMinorGC();
-    if (stack_scan_mode != Heap::StackScanMode::kNone &&
-        heap_->IsGCWithStack()) {
+    if (is_using_conservative_stack_scanning) {
       // Pinning objects must be the first step and must happen before
       // scavenging any objects. Specifically we must all pin all objects
       // before visiting other pinned objects. If we scavenge some object X
@@ -1024,8 +1030,7 @@ void ScavengerCollector::CollectGarbage() {
         heap_->IterateRootsForPrecisePinning(&handles_visitor);
       }
     }
-    const bool is_using_precise_pinning =
-        heap_->ShouldUsePrecisePinningForMinorGC();
+
     if (is_using_precise_pinning) {
       PreciseObjectPinningVisitor precise_pinning_visitor(
           heap_, main_thread_scavenger, pinned_objects);
@@ -1117,7 +1122,13 @@ void ScavengerCollector::CollectGarbage() {
   }
 
   ProcessWeakReferences(&ephemeron_table_list);
-  ProcessWeakObjects(js_weak_refs_list, weak_cells_list);
+
+  DCHECK_IMPLIES(!should_handle_weak_objects_weakly,
+                 js_weak_refs_list.IsEmpty());
+  DCHECK_IMPLIES(!should_handle_weak_objects_weakly, weak_cells_list.IsEmpty());
+  if (should_handle_weak_objects_weakly) {
+    ProcessWeakObjects(js_weak_refs_list, weak_cells_list);
+  }
 
   {
     TRACE_GC(heap_->tracer(),
@@ -1255,7 +1266,8 @@ Scavenger::Scavenger(ScavengerCollector* collector, Heap* heap, bool is_logging,
                      ScavengedObjectList* promoted_list,
                      EphemeronRememberedSet::TableList* ephemeron_table_list,
                      JSWeakRefsList* js_weak_refs_list,
-                     WeakCellsList* weak_cells_list)
+                     WeakCellsList* weak_cells_list,
+                     bool should_handle_weak_objects_weakly)
     : collector_(collector),
       heap_(heap),
       local_empty_chunks_(*empty_chunks),
@@ -1271,7 +1283,8 @@ Scavenger::Scavenger(ScavengerCollector* collector, Heap* heap, bool is_logging,
                            heap->isolate()->has_shared_space()),
       mark_shared_heap_(heap->isolate()->is_shared_space_isolate()),
       shortcut_strings_(
-          heap->CanShortcutStringsDuringGC(GarbageCollector::SCAVENGER)) {
+          heap->CanShortcutStringsDuringGC(GarbageCollector::SCAVENGER)),
+      should_handle_weak_objects_weakly_(should_handle_weak_objects_weakly) {
   DCHECK(!heap->incremental_marking()->IsMarking());
 }
 
@@ -1703,7 +1716,7 @@ SlotCallbackResult Scavenger::CheckAndScavengeObject(Heap* heap, TSlot slot) {
 template <ObjectAge Age>
 V8_INLINE bool Scavenger::ShouldRecordWeakObject(Tagged<HeapObject> host,
                                                  ObjectSlot slot) {
-  DCHECK(v8_flags.handle_weak_ref_weakly_in_minor_gc);
+  DCHECK(ShouldHandleWeakObjectsWeakly());
   Tagged<HeapObject> object = Cast<HeapObject>(slot.load());
   DCHECK_NE(kNullAddress, object.ptr());
   SynchronizePageAccess(object);
@@ -1742,7 +1755,7 @@ template void Scavenger::RecordJSWeakRefIfNeeded<ObjectAge::kOld>(
 
 template <ObjectAge Age>
 void Scavenger::RecordJSWeakRefIfNeeded(Tagged<JSWeakRef> js_weak_ref) {
-  if (!v8_flags.handle_weak_ref_weakly_in_minor_gc) {
+  if (!ShouldHandleWeakObjectsWeakly()) {
     return;
   }
 
@@ -1759,7 +1772,7 @@ template void Scavenger::RecordWeakCellIfNeeded<ObjectAge::kOld>(
 
 template <ObjectAge Age>
 void Scavenger::RecordWeakCellIfNeeded(Tagged<WeakCell> weak_cell) {
-  if (!v8_flags.handle_weak_ref_weakly_in_minor_gc) {
+  if (!ShouldHandleWeakObjectsWeakly()) {
     return;
   }
 
@@ -2004,15 +2017,17 @@ class ScavengerWeakObjectRetainer : public WeakObjectRetainer {
     }
     MapWord map_word = heap_object->map_word(kRelaxedLoad);
     DCHECK(map_word.IsForwardingAddress());
-    return map_word.ToForwardingAddress(heap_object);
+    Tagged<HeapObject> retained_as = map_word.ToForwardingAddress(heap_object);
+    DCHECK(IsJSFinalizationRegistry(retained_as));
+    return retained_as;
   }
 
   bool ShouldRecordSlots() const final { return true; }
 
   void RecordSlot(Tagged<HeapObject> host, ObjectSlot slot,
                   Tagged<HeapObject> object) final {
-    DCHECK(GCAwareObjectTypeCheck<JSFinalizationRegistry>(host, heap_));
-    DCHECK(GCAwareObjectTypeCheck<JSFinalizationRegistry>(object, heap_));
+    DCHECK(IsJSFinalizationRegistry(host));
+    DCHECK(IsJSFinalizationRegistry(object));
     // `JSFinalizationRegsitry` objects are generally long living and thus are
     // unlikely to be young.
     if (V8_LIKELY(HeapObjectWillBeOld(heap_, host)) &&
@@ -2047,7 +2062,7 @@ void ScavengerCollector::ProcessWeakObjects(
 void ProcessWeakObjectField(const Heap* heap, Tagged<HeapObject> host,
                             ObjectSlot slot, auto dead_callback) {
   Tagged<HeapObject> object = Cast<HeapObject>(slot.load());
-  DCHECK(!Heap::InFromPage(host) || HeapLayout::IsSelfForwarded(host));
+  DCHECK(!Heap::InFromPage(host));
   if (Heap::InFromPage(object)) {
     DCHECK(!IsUndefined(object));
     if (IsUnscavengedHeapObject(object)) {
@@ -2059,8 +2074,7 @@ void ProcessWeakObjectField(const Heap* heap, Tagged<HeapObject> host,
       MapWord map_word = object->map_word(kRelaxedLoad);
       DCHECK(map_word.IsForwardingAddress());
       Tagged<HeapObject> new_object = map_word.ToForwardingAddress(object);
-      DCHECK(!Heap::InFromPage(new_object) ||
-             HeapLayout::IsSelfForwarded(new_object));
+      DCHECK(!Heap::InFromPage(new_object));
       // `host` is younger than `object`, but in rare cases
       // `host` could be promoted to old gen while `object` remains in
       // young gen. For such cases a write barrier is needed to update the
@@ -2082,9 +2096,8 @@ void ScavengerCollector::ProcessJSWeakRefs(
     Scavenger::JSWeakRefsList& js_weak_refs) {
   const auto on_dead_target_callback = [this](Tagged<HeapObject> host,
                                               Tagged<HeapObject>) {
-    GCSafeCast<JSWeakRef>(host, heap_)
-        ->set_target(ReadOnlyRoots(heap_->isolate()).undefined_value(),
-                     SKIP_WRITE_BARRIER);
+    Cast<JSWeakRef>(host)->set_target(
+        ReadOnlyRoots(heap_->isolate()).undefined_value(), SKIP_WRITE_BARRIER);
   };
 
   Scavenger::JSWeakRefsList::Local local_js_weak_refs(js_weak_refs);
@@ -2102,10 +2115,6 @@ void ScavengerCollector::ProcessWeakCells(
                                                ObjectSlot slot,
                                                Tagged<HeapObject> target) {
     DCHECK(!IsUnscavengedHeapObject(target));
-    DCHECK(!Cast<HeapObject>(target)
-                ->map_word(kRelaxedLoad)
-                .IsForwardingAddress() ||
-           HeapLayout::IsSelfForwarded(target));
     DCHECK(!HeapLayout::InWritableSharedSpace(target));
     if (V8_UNLIKELY(HeapObjectWillBeOld(heap_, object) &&
                     !HeapObjectWillBeOld(heap_, target))) {
@@ -2115,12 +2124,11 @@ void ScavengerCollector::ProcessWeakCells(
   const auto on_dead_target_callback = [this, on_slot_updated_callback](
                                            Tagged<HeapObject> host,
                                            Tagged<HeapObject>) {
-    Tagged<WeakCell> weak_cell = GCSafeCast<WeakCell>(host, heap_);
+    Tagged<WeakCell> weak_cell = Cast<WeakCell>(host);
     // The WeakCell is liove but its value is dead. WeakCell retains the
     // JSFinalizationRegistry, so it's also guaranteed to be live.
     Tagged<JSFinalizationRegistry> finalization_registry =
-        GCSafeCast<JSFinalizationRegistry>(weak_cell->finalization_registry(),
-                                           heap_);
+        Cast<JSFinalizationRegistry>(weak_cell->finalization_registry());
     if (!finalization_registry->scheduled_for_cleanup()) {
       heap_->EnqueueDirtyJSFinalizationRegistry(finalization_registry,
                                                 on_slot_updated_callback,
@@ -2129,26 +2137,21 @@ void ScavengerCollector::ProcessWeakCells(
     // We're modifying the pointers in WeakCell and JSFinalizationRegistry
     // during GC; thus we need to record the slots it writes. The normal
     // write barrier is not enough, since it's disabled before GC.
-    weak_cell->GCSafeNullify(heap_->isolate(), on_slot_updated_callback);
-    DCHECK(GCAwareObjectTypeCheck<WeakCell>(
-        finalization_registry
-            ->RawField(JSFinalizationRegistry::kClearedCellsOffset)
-            .load(),
-        heap_));
+    weak_cell->Nullify(heap_->isolate(), on_slot_updated_callback);
+    DCHECK(finalization_registry->NeedsCleanup());
     DCHECK(finalization_registry->scheduled_for_cleanup());
   };
   const auto on_dead_unregister_token_callback =
       [this, on_slot_updated_callback](
           Tagged<HeapObject> host, Tagged<HeapObject> dead_unregister_token) {
-        Tagged<WeakCell> weak_cell = GCSafeCast<WeakCell>(host, heap_);
+        Tagged<WeakCell> weak_cell = Cast<WeakCell>(host);
         // The unregister token is dead. Remove any corresponding entries in the
         // key map. Multiple WeakCell with the same token will have all their
         // unregister_token field set to undefined when processing the first
         // WeakCell. Like above, we're modifying pointers during GC, so record
         // the slots.
         Tagged<JSFinalizationRegistry> finalization_registry =
-            GCSafeCast<JSFinalizationRegistry>(
-                weak_cell->finalization_registry(), heap_);
+            Cast<JSFinalizationRegistry>(weak_cell->finalization_registry());
         finalization_registry->RemoveUnregisterToken(
             dead_unregister_token, heap_->isolate(),
             JSFinalizationRegistry::kKeepMatchedCellsInRegistry,
